@@ -175,31 +175,110 @@ def create_requisition(data: dict, db: Session = Depends(get_db)):
             technical_spec=l.get("technical_spec") or l.get("spec") or (item.item_desc if item else None)
         ))
     
+    from app.services.audit_service import log_audit, log_workflow, log_notification
+
+    # Log Audit, Workflow, and Notification
+    log_audit(
+        db,
+        table_code="mtrl_req",
+        record_id=req.id,
+        action="CREATE",
+        changes={"ref_no": req.req_no, "total_est_amount": float(tot_amt), "purpose": req.purpose},
+        remarks=f"Requisition {req.req_no} created with {len(lines_data)} line item(s)."
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_req",
+        record_id=req.id,
+        action_code="SUBMIT",
+        action_label="Submit Requisition",
+        from_status="Draft",
+        to_status="Submitted",
+        remarks=f"Submitted requisition {req.req_no} for departmental scrutiny"
+    )
+    log_notification(
+        db,
+        title="Requisition Submitted",
+        message=f"Requisition #{req.req_no} ({req.purpose}) submitted for review.",
+        event_type="REQUISITION",
+        target_role="Procurement Officer",
+        action_route="/req/approvals"
+    )
+    
     db.commit()
     return {"message": "Requisition created successfully", "id": req.id, "req_no": req.req_no}
 
 @router.put("/{id}/status")
 def update_requisition_status(id: int, data: dict, db: Session = Depends(get_db)):
+    from app.services.audit_service import log_audit, log_workflow, log_notification
     req = db.query(MtrlReq).filter(MtrlReq.id == id).first()
     if not req:
         raise HTTPException(status_code=404, detail="Requisition not found")
     
+    old_stage = req.current_stage
     action = data.get("action", "").lower()
     if action == "approve":
         req.current_stage = "Approved"
         req.approved_at = datetime.now()
         for ln in req.lines:
             ln.approved_qty = ln.requested_qty
+        act_code = "APPROVE"
     elif action == "reject":
         req.current_stage = "Rejected"
+        act_code = "REJECT"
     elif action == "return":
         req.current_stage = "Returned for Correction"
+        act_code = "RETURN"
     elif action == "review":
         req.current_stage = "Under Review"
+        act_code = "REVIEW"
     elif action == "budget_validate":
         req.current_stage = "Budget Validation Pending"
+        act_code = "VALIDATE_BUDGET"
     else:
         req.current_stage = data.get("current_stage", req.current_stage)
+        act_code = "UPDATE_STAGE"
+
+    reason = data.get("remarks") or data.get("reason") or f"Requisition moved to {req.current_stage}"
+
+    log_audit(
+        db,
+        table_code="mtrl_req",
+        record_id=req.id,
+        action=act_code,
+        stage_from=old_stage,
+        stage_to=req.current_stage,
+        changes={"ref_no": req.req_no, "old_stage": old_stage, "new_stage": req.current_stage},
+        remarks=reason
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_req",
+        record_id=req.id,
+        action_code=act_code,
+        action_label=f"Requisition {req.current_stage}",
+        from_status=old_stage,
+        to_status=req.current_stage,
+        remarks=reason
+    )
+    if action == "approve":
+        log_notification(
+            db,
+            title="Requisition Approved",
+            message=f"Requisition #{req.req_no} has been approved by Head of Office.",
+            event_type="REQUISITION",
+            target_role="Procurement Officer",
+            action_route="/wo/create"
+        )
+    elif action == "reject":
+        log_notification(
+            db,
+            title="Requisition Rejected",
+            message=f"Requisition #{req.req_no} was rejected. Reason: {reason}",
+            event_type="REQUISITION",
+            target_role="Requestor",
+            action_route="/req/list"
+        )
 
     db.commit()
     return {"message": f"Requisition status updated to {req.current_stage}", "id": req.id, "stage": req.current_stage}

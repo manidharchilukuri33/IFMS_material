@@ -318,6 +318,16 @@ def create_issue(data: dict, db: Session = Depends(get_db)):
             stk.available_qty = max(Decimal("0.00"), stk.available_qty - qty)
             stk.total_stock_value = stk.available_qty * stk.avg_unit_cost
 
+    from app.services.audit_service import log_audit
+    log_audit(
+        db,
+        table_code="mtrl_issue",
+        record_id=issue.id,
+        action="ISSUE",
+        changes={"ref_no": issue.issue_no, "receiver": issue.receiver_name, "total_value": float(tot_val)},
+        remarks=f"Material issue note {issue.issue_no} issued to {issue.receiver_name}."
+    )
+
     db.commit()
     return {"message": "Stock issued successfully", "id": issue.id, "issue_no": issue.issue_no}
 

@@ -232,6 +232,35 @@ def create_grn(data: dict, db: Session = Depends(get_db)):
             storage_bin=l.get("storage_bin", "Receiving Bay A")
         ))
 
+    from app.services.audit_service import log_audit, log_workflow, log_notification
+
+    log_audit(
+        db,
+        table_code="mtrl_grn",
+        record_id=grn.id,
+        action="CREATE",
+        changes={"ref_no": grn.grn_no, "challan_no": grn.challan_no, "gate_entry_no": grn.gate_entry_no},
+        remarks=f"Goods Receipt Note {grn.grn_no} created against PO #{wo.wo_no}."
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_grn",
+        record_id=grn.id,
+        action_code="RECEIVE_GOODS",
+        action_label="Receive Goods at Gate",
+        from_status="In Transit",
+        to_status="Pending Inspection",
+        remarks=f"Gate entry {grn.gate_entry_no} logged at store"
+    )
+    log_notification(
+        db,
+        title="Consignment Arrived",
+        message=f"GRN #{grn.grn_no} arrived. Technical inspection required.",
+        event_type="INSPECTION",
+        target_role="Inspection Officer",
+        action_route="/grn/pending"
+    )
+
     db.commit()
     return {"message": "GRN created successfully", "id": grn.id, "grn_no": grn.grn_no}
 
@@ -303,6 +332,44 @@ def record_inspection(id: int, data: dict, db: Session = Depends(get_db)):
             rtv_date=date.today(),
             gatepass_no=f"GP/RTV/{random.randint(1000,9999)}"
         ))
+
+    from app.services.audit_service import log_audit, log_workflow, log_notification
+    log_audit(
+        db,
+        table_code="mtrl_insp",
+        record_id=grn.id,
+        action="INSPECT",
+        changes={"ref_no": insp_no, "passed_qty": float(passed_q), "rejected_qty": float(rej_q), "status": insp.overall_status},
+        remarks=f"Inspection {insp_no} completed. Status: {insp.overall_status}"
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_grn",
+        record_id=grn.id,
+        action_code="INSPECT",
+        action_label=f"Inspection {insp.overall_status}",
+        from_status="Pending Inspection",
+        to_status=insp.overall_status,
+        remarks=insp.rejection_reason or f"Passed {passed_q}, Rejected {rej_q}"
+    )
+    if rej_q > 0:
+        log_notification(
+            db,
+            title="Consignment QA Rejected",
+            message=f"GRN #{grn.grn_no} failed QA inspection ({rej_q} units rejected). Return to Vendor (RTV) initiated.",
+            event_type="INSPECTION",
+            target_role="Store Officer",
+            action_route="/grn/rtv"
+        )
+    else:
+        log_notification(
+            db,
+            title="Consignment Inspected & Accepted",
+            message=f"GRN #{grn.grn_no} QA inspection approved. Ready for stock posting.",
+            event_type="INSPECTION",
+            target_role="Store Officer",
+            action_route="/grn/list"
+        )
 
     db.commit()
     return {"message": "Quality inspection recorded successfully", "insp_no": insp_no, "overall_status": insp.overall_status}

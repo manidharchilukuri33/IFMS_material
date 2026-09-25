@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, BigInteger, String, Boolean, Text, Date, DateTime, Numeric, ForeignKey
+from sqlalchemy import Column, Integer, BigInteger, String, Boolean, Text, Date, DateTime, Numeric, ForeignKey, JSON
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -100,3 +101,78 @@ class BudgetSnapshot(Base):
     expenditure_amount = Column(Numeric(18, 2), default=0)
     committed_amount = Column(Numeric(18, 2), default=0)
     available_balance = Column(Numeric(18, 2), default=0)
+
+class AppUser(Base):
+    __tablename__ = "app_users"
+    id = Column(Integer, primary_key=True, index=True)
+    login_id = Column(String(100), nullable=False, unique=True)
+    full_name = Column(String(255), nullable=False)
+    email = Column(String(255))
+    mobile = Column(String(50))
+    password_hash = Column(Text, nullable=False)
+    is_active = Column(Boolean, default=True)
+    is_superuser = Column(Boolean, default=False)
+    user_type = Column(String(50))
+    department_id = Column(Integer, ForeignKey("departments.id"))
+    office_id = Column(Integer, ForeignKey("offices.id"))
+    tenant_id = Column(Integer)
+    entity_id = Column(Integer)
+    branch_id = Column(Integer)
+    employee_id = Column(String(50))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_login = Column(DateTime(timezone=True))
+
+    department = relationship("Department")
+    office = relationship("Office")
+    roles = relationship("UserRole", back_populates="user")
+
+class Role(Base):
+    __tablename__ = "roles"
+    id = Column(Integer, primary_key=True, index=True)
+    role_code = Column(String(100), nullable=False, unique=True)
+    role_name = Column(String(255), nullable=False)
+    role_category = Column(String(100))
+    description = Column(Text)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user_mappings = relationship("UserRole", back_populates="role")
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("app_users.id"), nullable=False)
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
+    assigned_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("AppUser", back_populates="roles")
+    role = relationship("Role", back_populates="user_mappings")
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+    id = Column(Integer, primary_key=True, index=True)
+    table_code = Column(String(100), nullable=False)
+    record_id = Column(Integer, nullable=False)
+    action = Column(String(50), nullable=False)
+    changed_by_id = Column(Integer)
+    changed_by_name = Column(String(255))
+    changed_at = Column(DateTime(timezone=True), server_default=func.now())
+    stage_from = Column(String(100))
+    stage_to = Column(String(100))
+    changes = Column(JSON)
+    ip_address = Column(String(100))
+    remarks = Column(Text)
+
+class GenWorkflowHistory(Base):
+    __tablename__ = "gen_workflow_history"
+    id = Column(Integer, primary_key=True, index=True)
+    table_code = Column(String(100), nullable=False)
+    record_id = Column(Integer, nullable=False)
+    action_code = Column(String(50), nullable=False)
+    action_label = Column(String(255))
+    from_status = Column(String(100))
+    to_status = Column(String(100), nullable=False)
+    action_by = Column(Integer)
+    action_by_name = Column(String(255))
+    remarks = Column(Text)
+    action_at = Column(DateTime(timezone=True), server_default=func.now())

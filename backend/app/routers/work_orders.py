@@ -188,7 +188,7 @@ def create_work_order(data: dict, db: Session = Depends(get_db)):
         ))
 
     # Add initial delivery tracking record
-    db.add(MtrlDelivery(
+    deliv = MtrlDelivery(
         tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2,
         delivery_ref_no=f"DEL/2026/{random.randint(1000,9999)}",
         wo_id=wo.id,
@@ -197,7 +197,37 @@ def create_work_order(data: dict, db: Session = Depends(get_db)):
         expected_date=wo.delivery_due_date,
         courier_transporter="Pending Transporter Assignment",
         delivery_status="In Transit"
-    ))
+    )
+    db.add(deliv)
+
+    from app.services.audit_service import log_audit, log_workflow, log_notification
+
+    log_audit(
+        db,
+        table_code="mtrl_wo",
+        record_id=wo.id,
+        action="CREATE",
+        changes={"ref_no": wo.wo_no, "total_wo_amount": float(wo.total_wo_amount), "vendor_id": wo.party_id},
+        remarks=f"Purchase/Work Order {wo.wo_no} issued to vendor."
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_wo",
+        record_id=wo.id,
+        action_code="ISSUE_WO",
+        action_label="Issue Work Order",
+        from_status="Approved Requisition",
+        to_status="Issued",
+        remarks=f"Issued purchase order {wo.wo_no}"
+    )
+    log_notification(
+        db,
+        title="Purchase Order Issued",
+        message=f"Purchase Order #{wo.wo_no} has been issued and dispatched to vendor.",
+        event_type="WORK_ORDER",
+        target_role="Store Officer",
+        action_route="/wo/delivery"
+    )
 
     db.commit()
     return {"message": "Work order created successfully", "id": wo.id, "wo_no": wo.wo_no}
@@ -229,6 +259,26 @@ def create_amendment(id: int, data: dict, db: Session = Depends(get_db)):
         wo.delivery_due_date = date.fromisoformat(data["new_delivery_date"])
     elif data["amend_type"] == "Value Revision" and data.get("new_value"):
         wo.total_wo_amount = Decimal(str(data["new_value"]))
+
+    from app.services.audit_service import log_audit, log_workflow
+    log_audit(
+        db,
+        table_code="mtrl_wo_amend",
+        record_id=wo.id,
+        action="AMEND",
+        changes={"ref_no": amend_no, "amend_type": amend.amend_type, "reason": amend.reason},
+        remarks=f"Amendment {amend_no} ({amend.amend_type}) recorded for {wo.wo_no}"
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_wo",
+        record_id=wo.id,
+        action_code="AMEND",
+        action_label=f"PO Amended ({amend.amend_type})",
+        from_status="Issued",
+        to_status="Amended",
+        remarks=amend.reason
+    )
 
     db.commit()
     return {"message": "Work order amendment approved and recorded", "amend_no": amend_no}

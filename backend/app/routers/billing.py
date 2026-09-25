@@ -140,6 +140,24 @@ def create_invoice(data: dict, db: Session = Depends(get_db)):
         match_verdict="Full Match"
     ))
 
+    from app.services.audit_service import log_audit, log_notification
+    log_audit(
+        db,
+        table_code="mtrl_invoice",
+        record_id=inv.id,
+        action="CREATE",
+        changes={"ref_no": inv.inv_no, "vendor_inv_no": inv.vendor_inv_no, "gross_amount": float(tot)},
+        remarks=f"Vendor Invoice {inv.inv_no} (#{inv.vendor_inv_no}) created and 3-way match passed."
+    )
+    log_notification(
+        db,
+        title="Vendor Invoice Cleared for Payment",
+        message=f"Invoice #{inv.inv_no} (₹{tot:,.2f}) verified against GRN & PO. Ready for PFMS clearance.",
+        event_type="BILLING",
+        target_role="Finance Wing",
+        action_route="/billing/invoice"
+    )
+
     db.commit()
     return {"message": "Invoice entered and matched successfully", "id": inv.id, "inv_no": inv_no}
 

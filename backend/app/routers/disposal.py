@@ -66,6 +66,27 @@ def create_disposal_proposal(data: dict, db: Session = Depends(get_db)):
         disposal_mode=data.get("disposal_mode", "MSTC e-Auction")
     )
     db.add(disp)
+
+    from app.services.audit_service import log_audit, log_workflow
+    log_audit(
+        db,
+        table_code="mtrl_disposal",
+        record_id=disp.id,
+        action="CREATE",
+        changes={"ref_no": disp.disp_proposal_no, "book_value": float(book), "qty": float(qty)},
+        remarks=f"Disposal proposal {disp.disp_proposal_no} ({disp.condemnation_reason}) submitted."
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_disposal",
+        record_id=disp.id,
+        action_code="PROPOSE_DISPOSAL",
+        action_label="Propose Condemnation",
+        from_status="In Store",
+        to_status="Pending Approval",
+        remarks=disp.condemnation_reason
+    )
+
     db.commit()
     return {"message": "Disposal & Condemnation proposal submitted", "id": disp.id, "disp_proposal_no": disp.disp_proposal_no}
 
@@ -76,6 +97,25 @@ def approve_disposal_proposal(id: int, data: dict, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="Disposal proposal not found")
 
     d.auction_ref_no = data.get("auction_ref_no", f"MSTC/DEL/2026/{random.randint(100,999)}")
+    from app.services.audit_service import log_audit, log_workflow
+    log_audit(
+        db,
+        table_code="mtrl_disposal",
+        record_id=d.id,
+        action="APPROVE",
+        changes={"ref_no": d.disp_proposal_no, "auction_ref_no": d.auction_ref_no},
+        remarks=f"Disposal proposal {d.disp_proposal_no} approved for MSTC e-Auction."
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_disposal",
+        record_id=d.id,
+        action_code="APPROVE_AUCTION",
+        action_label="Approve for e-Auction",
+        from_status="Pending Approval",
+        to_status="Approved",
+        remarks=f"Listed on e-Auction under #{d.auction_ref_no}"
+    )
     db.commit()
     return {"message": "Disposal proposal approved and listed for e-Auction", "auction_ref_no": d.auction_ref_no}
 
@@ -104,6 +144,26 @@ def record_auction_sale(id: int, data: dict, db: Session = Depends(get_db)):
             unit_rate=stk.avg_unit_cost, txn_amount=d.disposal_qty * stk.avg_unit_cost,
             performed_by=1, remarks=f"Disposed {d.disp_proposal_no} to {d.buyer_name}"
         ))
+
+    from app.services.audit_service import log_audit, log_workflow
+    log_audit(
+        db,
+        table_code="mtrl_disposal",
+        record_id=d.id,
+        action="AUCTION_SOLD",
+        changes={"ref_no": d.disp_proposal_no, "buyer": d.buyer_name, "realized_value": float(d.realized_value)},
+        remarks=f"Scrap sold to {d.buyer_name} for INR {d.realized_value}."
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_disposal",
+        record_id=d.id,
+        action_code="AUCTION_SALE",
+        action_label="Complete Auction Sale",
+        from_status="Approved",
+        to_status="Sold",
+        remarks=f"Sale realized INR {d.realized_value} from {d.buyer_name}"
+    )
 
     db.commit()
     return {"message": "Scrap / Auction sale recorded and revenue realized", "realized_value": float(d.realized_value)}

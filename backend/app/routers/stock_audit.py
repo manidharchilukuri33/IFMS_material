@@ -83,6 +83,26 @@ def create_audit_schedule(data: dict, db: Session = Depends(get_db)):
             adjustment_action="Pending"
         ))
 
+    from app.services.audit_service import log_audit, log_workflow
+    log_audit(
+        db,
+        table_code="mtrl_audit",
+        record_id=audit.id,
+        action="CREATE",
+        changes={"ref_no": a_no, "audit_type": audit.audit_type, "store_id": store_id},
+        remarks=f"Physical verification audit schedule {a_no} created for Store #{store_id}."
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_audit",
+        record_id=audit.id,
+        action_code="INITIATE_PV",
+        action_label="Initiate Physical Verification",
+        from_status="Scheduled",
+        to_status="In Progress",
+        remarks=f"Audit schedule {a_no} initiated by Board of Inspection Officers"
+    )
+
     db.commit()
     return {"message": "Physical verification schedule created", "id": audit.id, "audit_no": a_no}
 
@@ -104,6 +124,27 @@ def record_audit_counts(id: int, data: dict, db: Session = Depends(get_db)):
 
     audit.audit_status = "Submitted"
     audit.end_date = date.today()
+
+    from app.services.audit_service import log_audit, log_workflow
+    log_audit(
+        db,
+        table_code="mtrl_audit",
+        record_id=audit.id,
+        action="RECORD_COUNTS",
+        changes={"ref_no": audit.audit_no, "status": "Submitted"},
+        remarks=f"Physical counts recorded and submitted for audit {audit.audit_no}."
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_audit",
+        record_id=audit.id,
+        action_code="SUBMIT_FINDINGS",
+        action_label="Submit Audit Findings",
+        from_status="In Progress",
+        to_status="Submitted",
+        remarks="Physical counts reconciled against stock ledger"
+    )
+
     db.commit()
     return {"message": "Physical counts and variances recorded"}
 

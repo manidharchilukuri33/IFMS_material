@@ -121,6 +121,35 @@ def create_tender(data: dict, db: Session = Depends(get_db)):
         bid_close_date=datetime.now() + timedelta(days=int(data.get("bidding_days", 21)))
     )
     db.add(tender)
+    from app.services.audit_service import log_audit, log_workflow, log_notification
+
+    log_audit(
+        db,
+        table_code="mtrl_tender",
+        record_id=tender.id,
+        action="CREATE",
+        changes={"ref_no": tender.tender_no, "title": tender.tender_title, "estimated_cost": float(tender.estimated_cost)},
+        remarks=f"Tender {tender.tender_no} created and published."
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_tender",
+        record_id=tender.id,
+        action_code="PUBLISH_TENDER",
+        action_label="Publish Tender Notice (NIT)",
+        from_status="Consolidated Requisition",
+        to_status="Published",
+        remarks=f"Published tender {tender.tender_no} on {tender.portal_ref_no}"
+    )
+    log_notification(
+        db,
+        title="Tender Published",
+        message=f"Tender #{tender.tender_no} ({tender.tender_title}) has been published for bidding.",
+        event_type="TENDER",
+        target_role="Procurement Officer",
+        action_route="/proc/tenders"
+    )
+
     db.commit()
     return {"message": "Tender created and published successfully", "id": tender.id, "tender_no": tender.tender_no}
 
@@ -203,6 +232,34 @@ def award_tender(id: int, data: dict, db: Session = Depends(get_db)):
     # Mark quote as selected
     for q in tender.quotes:
         q.is_selected = (q.party_id == party_id)
+
+    from app.services.audit_service import log_audit, log_workflow, log_notification
+    log_audit(
+        db,
+        table_code="mtrl_tender",
+        record_id=tender.id,
+        action="AWARD",
+        changes={"ref_no": tender.tender_no, "awarded_party_id": party_id},
+        remarks=f"Tender {tender.tender_no} awarded to vendor ID {party_id}."
+    )
+    log_workflow(
+        db,
+        table_code="mtrl_tender",
+        record_id=tender.id,
+        action_code="AWARD_CONTRACT",
+        action_label="Award Contract",
+        from_status="Evaluation Completed",
+        to_status="Awarded",
+        remarks=f"Contract awarded under tender {tender.tender_no}"
+    )
+    log_notification(
+        db,
+        title="Tender Awarded (L1 Selected)",
+        message=f"Tender #{tender.tender_no} has been awarded. Ready to issue Purchase Order.",
+        event_type="TENDER",
+        target_role="Procurement Officer",
+        action_route="/wo/create"
+    )
 
     db.commit()
     return {"message": "Tender awarded successfully", "tender_id": tender.id, "awarded_party_id": party_id}

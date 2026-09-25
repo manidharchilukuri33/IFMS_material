@@ -123,3 +123,136 @@ def get_integration_status(db: Session = Depends(get_db)):
         {"system": "GSTN Invoice & E-Way Bill Validation", "endpoint": "https://api.gst.gov.in/einvoice", "status": "Online", "latency_ms": 195, "last_sync": "5 mins ago"},
         {"system": "MSTC e-Auction Portal", "endpoint": "https://mstcecommerce.com/auction-api", "status": "Online", "latency_ms": 310, "last_sync": "1 hour ago"}
     ]
+
+# ----------------- User & Role Management (ifms_jk) -----------------
+@router.get("/users")
+def list_users(db: Session = Depends(get_db)):
+    from app.models.core_models import AppUser, Role, UserRole
+    users = db.query(AppUser).all()
+    res = []
+    for u in users:
+        user_roles = db.query(Role).join(UserRole, UserRole.role_id == Role.id).filter(UserRole.user_id == u.id).all()
+        role_names = [r.role_name for r in user_roles] or ["Staff User"]
+        primary_role = role_names[0]
+        dept_name = u.department.dept_name if u.department else "Head Office"
+        res.append({
+            "id": u.id,
+            "login_id": u.login_id,
+            "full_name": u.full_name,
+            "email": u.email,
+            "mobile": u.mobile,
+            "user_type": u.user_type,
+            "department_id": u.department_id,
+            "department_name": dept_name,
+            "office_name": u.office.office_name if u.office else "Head Office",
+            "is_active": u.is_active,
+            "status": "Active" if u.is_active else "Suspended",
+            "roles": role_names,
+            "role": primary_role,
+            "stores": "IT Store, Central Store" if "Procurement" in primary_role or "Store" in primary_role else "All Stores",
+            "approval_limit": 2500000 if "Procurement" in primary_role else (10000000 if "Approver" in primary_role or "Head" in primary_role else 0),
+            "created_at": u.created_at.isoformat() if u.created_at else None
+        })
+    return res
+
+@router.get("/roles")
+def list_roles(db: Session = Depends(get_db)):
+    from app.models.core_models import Role
+    roles = db.query(Role).filter(Role.is_active == True).all()
+    return [
+        {
+            "id": r.id,
+            "role_code": r.role_code,
+            "role_name": r.role_name,
+            "role_category": r.role_category,
+            "description": r.description,
+            "is_active": r.is_active
+        }
+        for r in roles
+    ]
+
+@router.get("/user-roles")
+def list_user_roles(db: Session = Depends(get_db)):
+    from app.models.core_models import UserRole
+    mappings = db.query(UserRole).all()
+    return [
+        {
+            "id": m.id,
+            "user_id": m.user_id,
+            "user_name": m.user.full_name if m.user else None,
+            "login_id": m.user.login_id if m.user else None,
+            "role_id": m.role_id,
+            "role_code": m.role.role_code if m.role else None,
+            "role_name": m.role.role_name if m.role else None,
+            "assigned_at": m.assigned_at.isoformat() if m.assigned_at else None
+        }
+        for m in mappings
+    ]
+
+@router.post("/user-roles")
+def assign_user_role(data: dict, db: Session = Depends(get_db)):
+    from app.models.core_models import UserRole
+    user_id = data.get("user_id")
+    role_id = data.get("role_id")
+    if not user_id or not role_id:
+        raise HTTPException(status_code=400, detail="user_id and role_id are required")
+    
+    existing = db.query(UserRole).filter(UserRole.user_id == user_id, UserRole.role_id == role_id).first()
+    if existing:
+        return {"message": "User role assignment already exists", "id": existing.id}
+    
+    mapping = UserRole(user_id=user_id, role_id=role_id)
+    db.add(mapping)
+    db.commit()
+    return {"message": "Role assigned to user successfully", "id": mapping.id}
+
+@router.put("/users/{id}/toggle-status")
+def toggle_user_status(id: int, data: Optional[dict] = None, db: Session = Depends(get_db)):
+    from app.models.core_models import AppUser
+    from app.services.audit_service import log_audit
+    u = db.query(AppUser).filter(AppUser.id == id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    old_status = "Active" if u.is_active else "Suspended"
+    u.is_active = not u.is_active
+    new_status = "Active" if u.is_active else "Suspended"
+    
+    reason = (data or {}).get("reason", f"Status changed to {new_status}")
+    log_audit(
+        db,
+        table_code="app_users",
+        record_id=u.id,
+        action="UPDATE",
+        remarks=f"User {u.login_id} status changed from {old_status} to {new_status}. Reason: {reason}"
+    )
+    db.commit()
+    return {"message": f"User {u.login_id} is now {new_status}", "is_active": u.is_active, "status": new_status}
+
+# ----------------- Workflow Execution History -----------------
+@router.get("/workflow-logs")
+def list_workflow_logs(table_code: Optional[str] = None, record_id: Optional[int] = None, db: Session = Depends(get_db)):
+    from app.models.core_models import GenWorkflowHistory
+    query = db.query(GenWorkflowHistory)
+    if table_code:
+        query = query.filter(GenWorkflowHistory.table_code == table_code)
+    if record_id:
+        query = query.filter(GenWorkflowHistory.record_id == record_id)
+    
+    logs = query.order_by(GenWorkflowHistory.id.desc()).limit(100).all()
+    return [
+        {
+            "id": l.id,
+            "table_code": l.table_code,
+            "record_id": l.record_id,
+            "action_code": l.action_code,
+            "action_label": l.action_label,
+            "from_status": l.from_status,
+            "to_status": l.to_status,
+            "action_by": l.action_by,
+            "action_by_name": l.action_by_name,
+            "remarks": l.remarks,
+            "action_at": l.action_at.isoformat() if l.action_at else None
+        }
+        for l in logs
+    ]

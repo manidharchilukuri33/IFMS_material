@@ -69,18 +69,86 @@ def get_vendor_performance(db: Session = Depends(get_db)):
     ]
 
 @router.get("/audit-trail")
-def get_audit_trail(db: Session = Depends(get_db)):
-    movs = db.query(MtrlMovement).order_by(MtrlMovement.id.desc()).limit(50).all()
-    return [
-        {
-            "id": m.id,
-            "timestamp": m.txn_timestamp.isoformat() if m.txn_timestamp else None,
-            "action": m.txn_type,
-            "doc_ref_no": m.ref_doc_no,
-            "item_name": m.item.item_name if m.item else "Item",
-            "store_name": m.store.store_name if m.store else "Store",
-            "user": "Anil Katwale (Procurement Officer)",
-            "details": m.remarks or f"{m.txn_type} txn recorded"
-        }
-        for m in movs
-    ]
+def get_audit_trail(table_code: Optional[str] = None, record_id: Optional[int] = None, db: Session = Depends(get_db)):
+    from app.models.core_models import AuditLog
+    query = db.query(AuditLog)
+    if table_code:
+        query = query.filter(AuditLog.table_code == table_code)
+    if record_id:
+        query = query.filter(AuditLog.record_id == record_id)
+    
+    logs = query.order_by(AuditLog.id.desc()).limit(100).all()
+    
+    res = []
+    for l in logs:
+        ch = l.changes or {}
+        res.append({
+            "id": l.id,
+            "ts": l.changed_at.isoformat() if l.changed_at else None,
+            "timestamp": l.changed_at.isoformat() if l.changed_at else None,
+            "type": l.table_code.replace("mtrl_", "").replace("_", " ").title(),
+            "table_code": l.table_code,
+            "ref": ch.get("ref_no") or f"#{l.record_id}",
+            "doc_ref_no": ch.get("ref_no") or f"#{l.record_id}",
+            "action": l.action,
+            "field": ch.get("field", "—"),
+            "oldv": str(ch.get("old_value") or ch.get("oldv") or "—"),
+            "newv": str(ch.get("new_value") or ch.get("newv") or "—"),
+            "reason": l.remarks or "—",
+            "details": l.remarks or f"{l.action} on {l.table_code}",
+            "by": l.changed_by_name or "Anil Katwale",
+            "user": l.changed_by_name or "Anil Katwale (Procurement Officer)",
+            "role": "Procurement Officer",
+            "approval": ch.get("approval_ref", "—"),
+            "src": "IFMS Web",
+            "ip": l.ip_address or "127.0.0.1"
+        })
+    
+    # If audit_log has few entries, also append stock movement entries
+    if len(res) < 20:
+        movs = db.query(MtrlMovement).order_by(MtrlMovement.id.desc()).limit(50).all()
+        for m in movs:
+            res.append({
+                "id": 10000 + m.id,
+                "ts": m.txn_timestamp.isoformat() if m.txn_timestamp else None,
+                "timestamp": m.txn_timestamp.isoformat() if m.txn_timestamp else None,
+                "type": "Stock Movement",
+                "table_code": "mtrl_movement",
+                "ref": m.ref_doc_no,
+                "doc_ref_no": m.ref_doc_no,
+                "action": m.txn_type,
+                "field": "Quantity",
+                "oldv": str(m.opening_qty),
+                "newv": str(m.closing_qty),
+                "reason": m.remarks or f"Txn {m.txn_type}",
+                "details": m.remarks or f"{m.txn_type} txn recorded",
+                "by": "Anil Katwale",
+                "user": "Anil Katwale (Store Officer)",
+                "role": "Store Officer",
+                "approval": m.ref_doc_no,
+                "src": "Store Ledger",
+                "ip": "127.0.0.1"
+            })
+    return res
+
+@router.post("/audit-log")
+def create_audit_entry(data: dict, db: Session = Depends(get_db)):
+    from app.services.audit_service import log_audit
+    entry = log_audit(
+        db,
+        table_code=data.get("table_code") or data.get("type", "MATERIAL"),
+        record_id=data.get("record_id") or 1,
+        action=data.get("action", "UPDATE"),
+        changed_by_id=data.get("changed_by_id", 1),
+        changed_by_name=data.get("by") or data.get("changed_by_name", "Anil Katwale (Procurement Officer)"),
+        changes={
+            "field": data.get("field"),
+            "oldv": data.get("oldv"),
+            "newv": data.get("newv"),
+            "ref_no": data.get("ref")
+        },
+        remarks=data.get("reason") or data.get("remarks"),
+        ip_address=data.get("ip", "127.0.0.1")
+    )
+    db.commit()
+    return {"message": "Audit entry recorded successfully", "id": entry.id if entry else None}

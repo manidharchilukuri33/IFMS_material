@@ -866,14 +866,34 @@ function confirmAct(opts, cb){
    10. AUDIT LOGGING
    ------------------------------------------------------------ */
 function logAudit(type, ref, action, field, oldv, newv, reason){
-  DB.trail.unshift({
+  var entry = {
     id:uid('AT'), ts: nowIso(), type:type, ref:ref, action:action,
     field:field||'\u2014', oldv:oldv||'\u2014', newv:newv||'\u2014', reason:reason||'\u2014',
     by:'Anil Katwale', role:'Procurement Officer', dept:DEPTS[0],
     approval:'\u2014', src:'IFMS Web', ip:'10.24.8.117'
-  });
+  };
+  DB.trail.unshift(entry);
   if(DB.trail.length > 400) DB.trail.length = 400;
   save();
+
+  try {
+    fetch(API_BASE + '/reports/audit-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        table_code: 'mtrl_' + String(type).toLowerCase().replace(/\s+/g, '_'),
+        type: type,
+        ref: ref,
+        action: action,
+        field: field,
+        oldv: oldv,
+        newv: newv,
+        reason: reason,
+        by: 'Anil Katwale',
+        ip: '10.24.8.117'
+      })
+    }).catch(function(){});
+  } catch(e){}
 }
 function auditTableHtml(rows){
   if(!rows || !rows.length) return '<div class="note in">No audit entry recorded against this record yet.</div>';
@@ -7413,6 +7433,13 @@ function toggleRole(id){
     function(reason){
       var old = r.status; r.status = next;
       logAudit('User Role Mapping', r.empc, next,'Status', old, next, reason);
+      if (r.user_id) {
+        fetch(API_BASE + '/admin/users/' + r.user_id + '/toggle-status', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: reason })
+        }).catch(function(){});
+      }
       tblReload('tRol', DB.roles);
       commit(esc(r.user)+' '+next.toLowerCase()+'.','ok');
     });
@@ -8059,6 +8086,40 @@ async function syncWithBackend(){
         });
       }
     }
+
+    // Fetch Users & Roles dynamically from PostgreSQL ifms_jk
+    try {
+      const userRes = await fetch(API_BASE + '/admin/users');
+      if (userRes.ok) {
+        const uList = await userRes.json();
+        if (uList && uList.length) {
+          DB.roles = uList.map(function(u, idx){
+            return {
+              id: 'RO' + (u.id || (idx+1)),
+              user_id: u.id,
+              user: u.full_name || u.login_id,
+              empc: u.login_id || ('EMP/' + (1000 + idx)),
+              role: u.role || 'Procurement Officer',
+              dept: u.department_name || DEPTS[0],
+              stores: u.stores || 'IT Store, Central Store',
+              limit: u.approval_limit || 2500000,
+              status: u.status || 'Active'
+            };
+          });
+        }
+      }
+    } catch(e){}
+
+    // Fetch Audit Trail dynamically from PostgreSQL ifms_jk
+    try {
+      const trailRes = await fetch(API_BASE + '/reports/audit-trail');
+      if (trailRes.ok) {
+        const tList = await trailRes.json();
+        if (tList && tList.length) {
+          DB.trail = tList;
+        }
+      }
+    } catch(e){}
 
     save();
     refreshNavCounts();

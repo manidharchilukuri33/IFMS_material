@@ -117,6 +117,26 @@ def create_defect(data: dict, db: Session = Depends(get_db)):
         resolution_status="Reported"
     )
     db.add(defect)
+
+    from app.services.audit_service import log_audit, log_notification
+    log_audit(
+        db,
+        table_code="mtrl_defect",
+        record_id=defect.id,
+        action="CREATE",
+        changes={"ref_no": tkt_no, "severity": defect.severity, "desc": defect.defect_desc},
+        remarks=f"Defect ticket {tkt_no} logged. Severity: {defect.severity}"
+    )
+    if defect.severity == "Critical":
+        log_notification(
+            db,
+            title="Critical Defect Logged",
+            message=f"Critical defect ticket #{tkt_no} ({defect.defect_desc}) logged. SLA TAT: 24 hrs.",
+            event_type="WARRANTY",
+            target_role="Procurement Officer",
+            action_route="/warranty/defects"
+        )
+
     db.commit()
     return {"message": "Defect complaint ticket logged", "id": defect.id, "ticket_no": tkt_no}
 
@@ -129,16 +149,45 @@ def resolve_defect(id: int, data: dict, db: Session = Depends(get_db)):
     d.resolution_status = "Resolved"
     d.resolved_date = date.today()
     d.vendor_response = data.get("vendor_response", "Service completed by OEM engineer")
+
+    from app.services.audit_service import log_audit
+    log_audit(
+        db,
+        table_code="mtrl_defect",
+        record_id=d.id,
+        action="RESOLVE",
+        changes={"ref_no": d.ticket_no, "resolution_status": "Resolved", "response": d.vendor_response},
+        remarks=f"Defect ticket {d.ticket_no} marked resolved by OEM engineer."
+    )
+
     db.commit()
     return {"message": "Defect complaint marked resolved"}
 
 @router.put("/defects/{id}/escalate")
-def escalate_defect(id: int, db: Session = Depends(get_db)):
+def escalate_defect(id: int, data: Optional[dict] = None, db: Session = Depends(get_db)):
     d = db.query(MtrlDefect).filter(MtrlDefect.id == id).first()
     if not d:
         raise HTTPException(status_code=404, detail="Defect ticket not found")
 
     d.resolution_status = "Escalated to OEM"
     d.escalated_to_gem = True
+    
+    from app.services.audit_service import log_audit, log_notification
+    log_audit(
+        db,
+        table_code="mtrl_defect",
+        record_id=d.id,
+        action="ESCALATE",
+        changes={"ref_no": d.ticket_no, "resolution_status": "Escalated to OEM"},
+        remarks=f"Defect ticket {d.ticket_no} escalated to OEM Regional Head and GeM incident portal."
+    )
+    log_notification(
+        db,
+        title="Defect Escalated to OEM",
+        message=f"Defect ticket #{d.ticket_no} has breached TAT and is escalated to OEM and GeM.",
+        event_type="WARRANTY",
+        target_role="Head of Office",
+        action_route="/warranty/defects"
+    )
     db.commit()
     return {"message": "Defect ticket escalated to OEM Headquarters and GeM incident portal"}
