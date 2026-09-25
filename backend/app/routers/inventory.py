@@ -193,8 +193,39 @@ def receive_transfer(id: int, db: Session = Depends(get_db)):
     trans = db.query(MtrlTransfer).filter(MtrlTransfer.id == id).first()
     if not trans:
         raise HTTPException(status_code=404, detail="Transfer record not found")
-    
+    if trans.received_qty:
+        return {"message": "Stock transfer already received into destination store"}
+
     trans.received_qty = trans.transfer_qty
+
+    src = db.query(MtrlStock).filter(MtrlStock.store_id == trans.from_store_id, MtrlStock.item_id == trans.item_id).first()
+    if src:
+        src.available_qty = max(Decimal("0.00"), src.available_qty - trans.transfer_qty)
+
+    item = db.query(MtrlItem).filter(MtrlItem.id == trans.item_id).first()
+    rate = item.estimated_rate if item else Decimal("0.00")
+    dst = db.query(MtrlStock).filter(MtrlStock.store_id == trans.to_store_id, MtrlStock.item_id == trans.item_id).first()
+    if not dst:
+        dst = MtrlStock(
+            tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2,
+            store_id=trans.to_store_id, item_id=trans.item_id,
+            available_qty=trans.transfer_qty, avg_unit_cost=rate,
+            total_stock_value=trans.transfer_qty * rate, storage_bin="Aisle-1/Rack-1"
+        )
+        db.add(dst)
+    else:
+        dst.available_qty += trans.transfer_qty
+        dst.total_stock_value = dst.available_qty * dst.avg_unit_cost
+
+    db.add(MtrlMovement(
+        tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,
+        store_id=trans.to_store_id, item_id=trans.item_id,
+        txn_type="STORE_TRANSFER", ref_doc_type="TRANSFER", ref_doc_id=trans.id, ref_doc_no=trans.transfer_no,
+        opening_qty=(dst.available_qty - trans.transfer_qty), txn_qty=trans.transfer_qty, closing_qty=dst.available_qty,
+        unit_rate=rate, txn_amount=trans.transfer_qty * rate,
+        performed_by=1, remarks=f"Received transfer {trans.transfer_no} from store {trans.from_store_id}"
+    ))
+
     db.commit()
     return {"message": "Stock transfer received into destination store"}
 
@@ -304,6 +335,46 @@ def create_return(data: dict, db: Session = Depends(get_db)):
     db.add(ret)
     db.commit()
     return {"message": "Material returned to store ledger", "id": ret.id, "return_no": ret_no}
+
+@router.put("/returns/{id}/restock")
+def restock_return(id: int, db: Session = Depends(get_db)):
+    ret = db.query(MtrlReturn).filter(MtrlReturn.id == id).first()
+    if not ret:
+        raise HTTPException(status_code=404, detail="Return record not found")
+
+    already = db.query(MtrlMovement).filter(
+        MtrlMovement.ref_doc_no == ret.return_no, MtrlMovement.txn_type == "RETURN_RESTOCK"
+    ).first()
+    if already:
+        return {"message": "Return already restocked"}
+
+    item = db.query(MtrlItem).filter(MtrlItem.id == ret.item_id).first()
+    rate = item.estimated_rate if item else Decimal("0.00")
+
+    stk = db.query(MtrlStock).filter(MtrlStock.store_id == ret.store_id, MtrlStock.item_id == ret.item_id).first()
+    if not stk:
+        stk = MtrlStock(
+            tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2,
+            store_id=ret.store_id, item_id=ret.item_id,
+            available_qty=ret.return_qty, avg_unit_cost=rate,
+            total_stock_value=ret.return_qty * rate, storage_bin="Aisle-1/Rack-1"
+        )
+        db.add(stk)
+    else:
+        stk.available_qty += ret.return_qty
+        stk.total_stock_value = stk.available_qty * stk.avg_unit_cost
+
+    db.add(MtrlMovement(
+        tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,
+        store_id=ret.store_id, item_id=ret.item_id,
+        txn_type="RETURN_RESTOCK", ref_doc_type="RETURN", ref_doc_id=ret.id, ref_doc_no=ret.return_no,
+        opening_qty=(stk.available_qty - ret.return_qty), txn_qty=ret.return_qty, closing_qty=stk.available_qty,
+        unit_rate=rate, txn_amount=ret.return_qty * rate,
+        performed_by=1, remarks=f"Restocked return {ret.return_no}"
+    ))
+
+    db.commit()
+    return {"message": "Return restocked into store"}
 
 # ----------------- Tool Daily Check-Out / Check-In -----------------
 @router.get("/tool-issuances")

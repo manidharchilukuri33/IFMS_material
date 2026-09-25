@@ -164,7 +164,7 @@ def create_item(data: dict, db: Session = Depends(get_db)):
         reorder_qty=Decimal(str(data.get("reorder_qty", 0))),
         lead_time_days=data.get("lead_time_days", 7),
         estimated_rate=Decimal(str(data.get("estimated_rate", 0))),
-        is_active=True
+        is_active=data.get("is_active", True)
     )
     db.add(item)
     db.flush()

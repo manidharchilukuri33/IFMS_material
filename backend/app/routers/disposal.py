@@ -5,7 +5,7 @@ from decimal import Decimal
 from datetime import date
 import random
 from app.database import get_db
-from app.models.material_models import MtrlDisposal, MtrlStore, MtrlItem
+from app.models.material_models import MtrlDisposal, MtrlStore, MtrlItem, MtrlStock, MtrlMovement
 
 router = APIRouter(prefix="/disposal", tags=["Disposal & Condemnation Management"])
 
@@ -73,9 +73,26 @@ def record_auction_sale(id: int, data: dict, db: Session = Depends(get_db)):
     d = db.query(MtrlDisposal).filter(MtrlDisposal.id == id).first()
     if not d:
         raise HTTPException(status_code=404, detail="Disposal proposal not found")
+    if d.buyer_name:
+        return {"message": "Disposal sale already recorded", "realized_value": float(d.realized_value or 0)}
 
     d.buyer_name = data["buyer_name"]
     d.realized_value = Decimal(str(data["realized_value"]))
     d.deposit_challan_no = data.get("deposit_challan_no", f"CH/REC/{random.randint(1000,9999)}")
+
+    stk = db.query(MtrlStock).filter(MtrlStock.store_id == d.store_id, MtrlStock.item_id == d.item_id).first()
+    if stk:
+        stk.available_qty = max(Decimal("0.00"), stk.available_qty - d.disposal_qty)
+        stk.total_stock_value = stk.available_qty * stk.avg_unit_cost
+
+        db.add(MtrlMovement(
+            tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,
+            store_id=d.store_id, item_id=d.item_id,
+            txn_type="DISPOSAL", ref_doc_type="DISPOSAL", ref_doc_id=d.id, ref_doc_no=d.disp_proposal_no,
+            opening_qty=(stk.available_qty + d.disposal_qty), txn_qty=d.disposal_qty, closing_qty=stk.available_qty,
+            unit_rate=stk.avg_unit_cost, txn_amount=d.disposal_qty * stk.avg_unit_cost,
+            performed_by=1, remarks=f"Disposed {d.disp_proposal_no} to {d.buyer_name}"
+        ))
+
     db.commit()
     return {"message": "Scrap / Auction sale recorded and revenue realized", "realized_value": float(d.realized_value)}

@@ -171,6 +171,26 @@ def submit_quote(data: dict, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Bid/Quotation recorded successfully", "id": quote.id}
 
+@router.put("/quotes/{id}")
+def update_quote(id: int, data: dict, db: Session = Depends(get_db)):
+    q = db.query(MtrlQuote).filter(MtrlQuote.id == id).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+
+    if "is_technically_ok" in data:
+        q.is_technically_ok = data["is_technically_ok"]
+    if "eval_remarks" in data:
+        q.eval_remarks = data["eval_remarks"]
+    if "rank_order" in data:
+        q.rank_order = data["rank_order"]
+    if "is_selected" in data:
+        q.is_selected = data["is_selected"]
+    if "total_bid_value" in data:
+        q.total_bid_value = Decimal(str(data["total_bid_value"]))
+
+    db.commit()
+    return {"message": "Quote updated successfully", "id": q.id}
+
 @router.post("/tenders/{id}/award")
 def award_tender(id: int, data: dict, db: Session = Depends(get_db)):
     tender = db.query(MtrlTender).filter(MtrlTender.id == id).first()

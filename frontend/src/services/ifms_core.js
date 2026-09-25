@@ -465,6 +465,20 @@ function seedDB(){
     };
   });
 
+  /* ---------- tool issuances ---------- */
+  var toolMats = mats.filter(function(m){ return m.cat==='Tools & Equipment'; });
+  var toolIssuances = (toolMats.length? toolMats:mats).slice(0,2).map(function(mm,k){
+    return {
+      id:'TL'+(k+1), no:'TOOL/2026/'+pad(100+k,5), date: addDays('2026-09-10', k*4),
+      mat:mm.code, serial:'TOOL-SN-'+(4000+k), qty:1, store:STORES[k%STORES.length],
+      worker:['Ramesh Kumar','Suresh Yadav'][k%2], idCard:'EMP-'+(2200+k), shift:'Morning Shift',
+      expected: addDays('2026-09-10', k*4+3), returnedQty:k===0?1:0,
+      returnedDate: k===0? addDays('2026-09-10', k*4+3):'',
+      condition: k===0? 'Good / Inspected':'Working', fine:0,
+      status: k===0? 'Returned':'Issued', remarks:''
+    };
+  });
+
   /* ---------- invoices ---------- */
   var invs = [
     ['INV/2026/001879','VI-2026-4471','VEN-0001','WO/DIT/2026/000098','GRN/DIT/2026/000245',21806400,'Exception','Under Review','Pending'],
@@ -755,7 +769,7 @@ function seedDB(){
     version:1, created: nowIso(),
     materials:mats, requisitions:reqs, tenders:tenders, boq:boq, quotes:quotes, workorders:wos,
     deliveries:dels, grns:grns, inspections:insp, rtv:rtv, stock:stock, movements:movs,
-    issues:issues, returns:returns, transfers:transfers, invoices:invs,
+    issues:issues, returns:returns, transfers:transfers, toolIssuances:toolIssuances, invoices:invs,
     fees:fees, emds:emds, pgs:pgs, warranty:warr, defects:defs, disposals:disp,
     audits:audits, verification:verif, adjustments:adjs, forecast:fc, assets:assets,
     portals:portals, trail:trail, notifications:notes,
@@ -1165,7 +1179,8 @@ var NAV = [
     ['Inspection Register','grn/inspection'],['Return to Vendor','grn/rtv']]},
   {ic:'\u{1F3E2}', t:'Inventory Integration', items:[
     ['Stock Overview','inv/stock'],['Material Movement','inv/movement'],['Stock Transfer','inv/transfer'],
-    ['Stock Issue','inv/issue'],['Stock Return','inv/return'],['Reorder Planning','inv/reorder']]},
+    ['Stock Issue','inv/issue'],['Stock Return','inv/return'],['Tool Issuance','inv/tools'],
+    ['Reorder Planning','inv/reorder']]},
   {ic:'\u{1F4B0}', t:'Billing and Finance Interface', items:[
     ['Invoice Register','billing/invoice'],['Three-Way Matching','billing/match'],
     ['Bill Initiation','billing/initiate'],['Payment Status','billing/payment']]},
@@ -1352,8 +1367,8 @@ function globalSearch(q){
     .forEach(function(g){ push('GRN', g.no, 'grn/list'); });
   DB.tenders.filter(function(t){ return (t.no+' '+t.title).toLowerCase().indexOf(q)>=0; }).slice(0,3)
     .forEach(function(t){ push('Tender', t.no+' \u2014 '+t.title, 'proc/tender'); });
-  VENDORS.filter(function(v){ return v.name.toLowerCase().indexOf(q)>=0; }).slice(0,3)
-    .forEach(function(v){ push('Vendor', v.name, 'rep/vendor'); });
+  DB.vendors.filter(function(v){ return v.party_name.toLowerCase().indexOf(q)>=0; }).slice(0,3)
+    .forEach(function(v){ push('Vendor', v.party_name, 'rep/vendor'); });
   DB.invoices.filter(function(i){ return (i.no+' '+i.vinv).toLowerCase().indexOf(q)>=0; }).slice(0,3)
     .forEach(function(i){ push('Invoice', i.no+' \u2014 '+i.vinv, 'billing/invoice'); });
   box.innerHTML = hits.length
@@ -1364,7 +1379,7 @@ function globalSearch(q){
     : '<div style="padding:14px" class="muted">No record matches that search.</div>';
   box.classList.remove('hide');
 }
-function vname(code){ var v = byId(VENDORS,'code',code); return v? v.name : code; }
+function vname(code){ var v = byId(DB.vendors,'party_code',code); return v? v.party_name : code; }
 function mname(code){ var m = byId(DB.materials,'code',code); return m? m.name : code; }
 function muom(code){ var m = byId(DB.materials,'code',code); return m? m.uom : ''; }
 function mrate(code){ var m = byId(DB.materials,'code',code); return m? m.rate : 0; }
@@ -1879,7 +1894,7 @@ function loadMaterial(id){
   var t = document.querySelector('.ptitle'); if(t) t.textContent = 'Edit Material \u2014 '+m.code;
   toast('Loaded <b>'+esc(m.code)+'</b> for editing.','in');
 }
-function saveMaterial(status){
+async function saveMaterial(status){
   if(!requireOk('matForm')) return;
   var code = val('mCode').trim();
   var dup = DB.materials.filter(function(m){ return m.code.toLowerCase()===code.toLowerCase() && m.id!==EDIT_MAT; })[0];
@@ -1897,21 +1912,45 @@ function saveMaterial(status){
     costCentre:val('mCc'), disposalCat:val('mDisp'), updated:TODAY, createdBy:'Anil Katwale',
     attachments: attList('mAtt')
   };
-  if(EDIT_MAT){
-    var m = byId(DB.materials,'id',EDIT_MAT);
-    var changes = Object.keys(rec).filter(function(k){ return String(m[k])!==String(rec[k]) && k!=='updated' && k!=='attachments'; });
-    changes.slice(0,6).forEach(function(k){ logAudit('Material Master', code, 'Modified', k, m[k], rec[k], 'Master data revision'); });
-    Object.assign(m, rec);
-    commit('Updated <b>'+esc(code)+'</b>. '+changes.length+' field change(s) recorded in the audit trail.','ok');
-  } else {
-    rec.id = uid('M'); rec.stock = 0;
-    DB.materials.push(rec);
-    logAudit('Material Master', code, status==='Draft'?'Draft Created':'Created', 'Status','\u2014',status,'New material definition');
-    DB.stock.push({id:uid('S'), mat:code, store:STORES[0], bin:'Unassigned', avail:0, reserved:0,
-      inspection:0, blocked:0, damaged:0, expired:0, transit:0, rate:rec.rate, reorder:rec.reorder, batch:'', expiry:''});
-    commit('Saved <b>'+esc(code)+'</b> as '+status.toLowerCase()+'.','ok');
+  var catObj = byId(DB.categories,'cat_name',rec.cat);
+  var uomObj = byId(DB.uoms,'uom_code',rec.uom);
+  if(!catObj || !uomObj){ toast('Could not resolve category or UOM against the master data. Save aborted.','er'); return; }
+  var payload = {
+    item_code: rec.code, item_name: rec.name, item_desc: rec.spec,
+    cat_id: catObj.id, base_uom_id: uomObj.id,
+    is_capital: rec.fin==='Capital', is_consumable: rec.consumable==='Consumable',
+    is_service: rec.type==='Service', is_stockable: rec.stockType==='Stock',
+    estimated_rate: rec.rate, reorder_level: rec.reorder, reorder_qty: rec.reorderQty,
+    min_stock_level: rec.minStock, max_stock_level: rec.maxStock, lead_time_days: rec.leadTime,
+    brand_name: rec.make, make_model: rec.model, is_active: status!=='Draft'
+  };
+  var btn = document.activeElement; if(btn && btn.tagName==='BUTTON') btn.disabled = true;
+  try {
+    if(EDIT_MAT){
+      var m = byId(DB.materials,'id',EDIT_MAT);
+      var res = await fetch(API_BASE+'/materials/items/'+EDIT_MAT, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+      if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the update ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+      var changes = Object.keys(rec).filter(function(k){ return String(m[k])!==String(rec[k]) && k!=='updated' && k!=='attachments'; });
+      changes.slice(0,6).forEach(function(k){ logAudit('Material Master', code, 'Modified', k, m[k], rec[k], 'Master data revision'); });
+      Object.assign(m, rec);
+      commit('Updated <b>'+esc(code)+'</b> in PostgreSQL. '+changes.length+' field change(s) recorded in the audit trail.','ok');
+    } else {
+      var res = await fetch(API_BASE+'/materials/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+      if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the create ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+      var created = await res.json();
+      rec.id = created.id; rec.stock = 0;
+      DB.materials.push(rec);
+      logAudit('Material Master', code, status==='Draft'?'Draft Created':'Created', 'Status','\u2014',status,'New material definition');
+      DB.stock.push({id:uid('S'), mat:code, store:STORES[0], bin:'Unassigned', avail:0, reserved:0,
+        inspection:0, blocked:0, damaged:0, expired:0, transit:0, rate:rec.rate, reorder:rec.reorder, batch:'', expiry:''});
+      commit('Saved <b>'+esc(code)+'</b> to PostgreSQL as '+status.toLowerCase()+' (id '+created.id+').','ok');
+    }
+    goto('mm/register');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  } finally {
+    if(btn) btn.disabled = false;
   }
-  goto('mm/register');
 }
 
 /* ---------- category and UOM masters ---------- */
@@ -2008,15 +2047,29 @@ function mapBoq(id){
     footer:'<button class="btn" data-close>Cancel</button>'+
       '<button class="btn pri" onclick="saveBoqMap(\''+id+'\')">Save mapping and send for approval</button>'});
 }
-function saveBoqMap(id){
+async function saveBoqMap(id){
   if(!val('bqMat')){ markErr('bqMat',true); toast('Select a standardised material code.','er'); return; }
   var b = byId(DB.boq,'id',id), old = b.mat||'Not mapped';
-  b.mat = val('bqMat'); b.iUom = val('bqUom'); b.cf = nval('bqCf') || 1;
-  b.remarks = val('bqRem') || 'Mapped by procurement officer';
-  b.status = 'Pending Approval';
-  logAudit('BoQ Mapping', b.tender+' L'+b.line, 'Mapped', 'Material Code', old, b.mat, b.remarks);
-  closeModal(); tblPaint('tBoq');
-  commit('BoQ line mapped to <b>'+esc(b.mat)+'</b> and sent for approval.','ok');
+  var matObj = byId(DB.materials,'code', val('bqMat'));
+  var invUomObj = byId(DB.uoms,'uom_code', val('bqUom'));
+  var tenderUomObj = byId(DB.uoms,'uom_code', b.tUom) || invUomObj;
+  if(!matObj || !invUomObj || !tenderUomObj){ toast('Could not resolve the material or UOM against the master data.','er'); return; }
+  var payload = {boq_item_code: b.tender+'-L'+b.line, boq_desc: b.boqDesc, item_id: matObj.id,
+    tender_uom_id: tenderUomObj.id, inv_uom_id: invUomObj.id, conversion_factor: nval('bqCf') || 1};
+  try {
+    var res = await fetch(API_BASE+'/materials/boq-mappings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the mapping ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    b.id = created.id;
+    b.mat = val('bqMat'); b.iUom = val('bqUom'); b.cf = nval('bqCf') || 1;
+    b.remarks = val('bqRem') || 'Mapped by procurement officer';
+    b.status = 'Pending Approval';
+    logAudit('BoQ Mapping', b.tender+' L'+b.line, 'Mapped', 'Material Code', old, b.mat, b.remarks);
+    closeModal(); tblPaint('tBoq');
+    commit('BoQ line mapped to <b>'+esc(b.mat)+'</b> in PostgreSQL (id '+created.id+') and sent for approval.','ok');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  }
 }
 function newFromBoq(id){
   var b = byId(DB.boq,'id',id);
@@ -2100,23 +2153,43 @@ function simulateBulk(){
       '<button class="btn" onclick="document.getElementById(\'bulkOut\').innerHTML=\'\'">Discard</button></div>';
   }, 900);
 }
-function commitBulk(){
+async function commitBulk(){
   confirmAct({title:'Commit bulk upload', ok:'Commit records', kind:'in', btnClass:'ok',
-    message:'Two validated material records are added to the master as <b>Draft</b>.'}, function(){
-    [['MAT-IT-9001','Docking Station, USB-C','IT Equipment','Computers','Nos','Capital','Y',12,7400],
-     ['MAT-OFF-9002','Whiteboard Marker, Assorted','Office Supplies','Stationery','Packet','Revenue','N',150,240]
-    ].forEach(function(r){
-      DB.materials.push({id:uid('M'), code:r[0], name:r[1], cat:r[2], sub:r[3], uom:r[4], fin:r[5], asset:r[6],
-        reorder:r[7], rate:r[8], stock:0, status:'Draft', make:'\u2014', model:'\u2014', spec:r[1],
-        type:r[5]==='Capital'?'Asset':'Consumable', stockType:'Stock', consumable:r[5]==='Revenue'?'Consumable':'Non-Consumable',
-        hazardous:false, perishable:false, expiryReq:false, shelfLife:0, batchTrack:false, serialTrack:false,
-        minStock:Math.round(r[7]/2), maxStock:r[7]*6, reorderQty:r[7]*2, leadTime:21,
-        warrantyApplicable:r[6]==='Y', warrantyMonths:r[6]==='Y'?12:0, coa:COA[0], fund:FUNDS[0],
-        scheme:SCHEMES[0], project:PROJECTS[0], costCentre:COST_CENTRES[0],
-        disposalCat:'Consumable \u2014 Write-off', updated:TODAY, createdBy:'Anil Katwale', attachments:[]});
-      logAudit('Material Master', r[0], 'Bulk Created','Status','\u2014','Draft','Bulk upload batch');
-    });
-    commit('Committed 2 material records as drafts.','ok');
+    message:'Two validated material records are added to the master as <b>Draft</b>. Note: the backend\'s dedicated bulk-upload endpoint does not actually parse or persist files (it is a fixed-response stub), so each validated row is created individually through the real material-create endpoint instead.'}, async function(){
+    var rows = [['MAT-IT-9001','Docking Station, USB-C','IT Equipment','Computers','Nos','Capital','Y',12,7400],
+     ['MAT-OFF-9002','Whiteboard Marker, Assorted','Office Supplies','Stationery','Packet','Revenue','N',150,240]];
+    var UOM_ALIASES = {NOS:'NOS',PACKET:'PKT',PKT:'PKT',BOX:'BOX',REAM:'REAM',SET:'SET',BAG:'BAG',
+      KG:'KG',MT:'MT',METRE:'MTR',MTR:'MTR',LITRE:'LTR',LTR:'LTR',PAIR:'PAIR',ROLL:'ROLL'};
+    var okCount = 0;
+    for(var i=0;i<rows.length;i++){
+      var r = rows[i];
+      var catObj = byId(DB.categories,'cat_name', r[2]);
+      var uomCode = UOM_ALIASES[r[4].toUpperCase()] || r[4].toUpperCase();
+      var uomObj = byId(DB.uoms,'uom_code', uomCode);
+      if(!catObj || !uomObj){ toast('Row '+(i+1)+' (' +r[0]+ ') skipped: could not resolve category or UOM.','wa'); continue; }
+      var payload = {item_code:r[0], item_name:r[1], item_desc:r[1], cat_id:catObj.id, base_uom_id:uomObj.id,
+        is_capital: r[5]==='Capital', is_consumable: r[5]==='Revenue', is_stockable:true,
+        reorder_level:r[7], estimated_rate:r[8], is_active:false};
+      try {
+        var res = await fetch(API_BASE+'/materials/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+        if(!res.ok){ toast('Row '+(i+1)+' (' +r[0]+ ') rejected by the backend.','er'); continue; }
+        var created = await res.json();
+        okCount++;
+        DB.materials.push({id:created.id, code:r[0], name:r[1], cat:r[2], sub:r[3], uom:r[4], fin:r[5], asset:r[6],
+          reorder:r[7], rate:r[8], stock:0, status:'Draft', make:'\u2014', model:'\u2014', spec:r[1],
+          type:r[5]==='Capital'?'Asset':'Consumable', stockType:'Stock', consumable:r[5]==='Revenue'?'Consumable':'Non-Consumable',
+          hazardous:false, perishable:false, expiryReq:false, shelfLife:0, batchTrack:false, serialTrack:false,
+          minStock:Math.round(r[7]/2), maxStock:r[7]*6, reorderQty:r[7]*2, leadTime:21,
+          warrantyApplicable:r[6]==='Y', warrantyMonths:r[6]==='Y'?12:0, coa:COA[0], fund:FUNDS[0],
+          scheme:SCHEMES[0], project:PROJECTS[0], costCentre:COST_CENTRES[0],
+          disposalCat:'Consumable \u2014 Write-off', updated:TODAY, createdBy:'Anil Katwale', attachments:[]});
+        logAudit('Material Master', r[0], 'Bulk Created','Status','\u2014','Draft','Bulk upload batch');
+      } catch(err) {
+        toast('Row '+(i+1)+' (' +r[0]+ ') failed: could not reach the backend API.','er');
+      }
+    }
+    if(!okCount){ toast('No rows were committed to PostgreSQL.','er'); return; }
+    commit('Committed '+okCount+' material record(s) as drafts in PostgreSQL.','ok');
     goto('mm/register');
   });
 }
@@ -2236,6 +2309,11 @@ function repaintReqTables(){
   if(TBL.tReqA) tblReload('tReqA', pendingReqs());
   refreshNavCounts();
 }
+async function putReqStatus(id, action){
+  var res = await fetch(API_BASE+'/requisitions/'+id+'/status', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:action})});
+  if(!res.ok){ var e = await res.text(); throw new Error('backend rejected the request ('+res.status+'). '+e.slice(0,150)); }
+  return res.json();
+}
 function bulkApprove(){
   var sel = tblRows('tReqA');
   if(!sel.length){ toast('Select at least one requisition to approve.','wa'); return; }
@@ -2245,15 +2323,20 @@ function bulkApprove(){
     message: blocked.length
       ? blocked.length+' of the selected requisition(s) have <b>no budget available</b> and will be skipped.'
       : 'The selected requisitions move to <b>Approved</b> and become available for procurement planning.'},
-    function(reason){
-      var n=0;
-      sel.forEach(function(r){
-        if(r.budget==='Not Available') return;
-        var old = r.status; r.status='Approved'; r.approver='Procurement Officer'; n++;
-        logAudit('Requisition', r.no, 'Approved','Status',old,'Approved',reason);
-      });
+    async function(reason){
+      var n=0, failed=0;
+      for(var i=0;i<sel.length;i++){
+        var r = sel[i];
+        if(r.budget==='Not Available') continue;
+        try {
+          await putReqStatus(r.id, 'approve');
+          var old = r.status; r.status='Approved'; r.approver='Procurement Officer'; n++;
+          logAudit('Requisition', r.no, 'Approved','Status',old,'Approved',reason);
+        } catch(err) { failed++; }
+      }
       repaintReqTables();
-      commit('Approved '+n+' requisition(s)'+(blocked.length? '; '+blocked.length+' skipped for want of budget':'')+'.','ok');
+      var msg = 'Approved '+n+' requisition(s) in PostgreSQL'+(blocked.length? '; '+blocked.length+' skipped for want of budget':'')+(failed? '; '+failed+' failed':'')+'.';
+      commit(msg, failed? 'wa':'ok');
     });
 }
 function approveReq(id){
@@ -2265,33 +2348,39 @@ function approveReq(id){
     message:'The requisition is approved and released for procurement planning.',
     detail: kvRow('Department', esc(r.dept))+kvRow('Estimated value', inr(r.value))+
             kvRow('Budget status', esc(r.budget))+kvRow('Stock availability', esc(r.stockAvail))},
-    function(reason){
+    async function(reason){
+      try { await putReqStatus(r.id, 'approve'); }
+      catch(err){ toast('Save failed: '+esc(String(err.message||err)),'er'); return; }
       var old=r.status; r.status='Approved'; r.approver='Procurement Officer';
       logAudit('Requisition', r.no,'Approved','Status',old,'Approved',reason);
       closeAllModals(); repaintReqTables();
-      commit('Approved <b>'+esc(r.no)+'</b>.','ok');
+      commit('Approved <b>'+esc(r.no)+'</b> in PostgreSQL.','ok');
     });
 }
 function sendBackReq(id){
   var r = byId(DB.requisitions,'id',id);
   confirmAct({title:'Return requisition for correction', kind:'wa', reason:true, ok:'Return', btnClass:'warn',
     message:'<b>'+esc(r.no)+'</b> goes back to the requestor for correction.'},
-    function(reason){
+    async function(reason){
+      try { await putReqStatus(r.id, 'return'); }
+      catch(err){ toast('Save failed: '+esc(String(err.message||err)),'er'); return; }
       var old=r.status; r.status='Returned for Correction'; r.approver='Requestor';
       logAudit('Requisition', r.no,'Returned','Status',old,'Returned for Correction',reason);
       closeAllModals(); repaintReqTables();
-      commit('Returned <b>'+esc(r.no)+'</b> for correction.','wa');
+      commit('Returned <b>'+esc(r.no)+'</b> for correction in PostgreSQL.','wa');
     });
 }
 function rejectReq(id){
   var r = byId(DB.requisitions,'id',id);
   confirmAct({title:'Reject requisition', kind:'er', btnClass:'dgr', ok:'Reject', reason:true,
     message:'<b>'+esc(r.no)+'</b> is rejected and the requestor is notified.'},
-    function(reason){
+    async function(reason){
+      try { await putReqStatus(r.id, 'reject'); }
+      catch(err){ toast('Save failed: '+esc(String(err.message||err)),'er'); return; }
       var old=r.status; r.status='Rejected'; r.approver='\u2014';
       logAudit('Requisition', r.no,'Rejected','Status',old,'Rejected',reason);
       closeAllModals(); repaintReqTables();
-      commit('Rejected <b>'+esc(r.no)+'</b>.','er');
+      commit('Rejected <b>'+esc(r.no)+'</b> in PostgreSQL.','er');
     });
 }
 function initiateProc(id){
@@ -2509,7 +2598,7 @@ function checkStockDraft(){
   out.innerHTML = '<div class="note in"><span class="spin"></span> Querying stock across stores&hellip;</div>';
   setTimeout(function(){ out.innerHTML = stockPanel({lines:REQ_LINES}); toast('Stock availability retrieved.','ok'); }, 650);
 }
-function saveReq(status){
+async function saveReq(status){
   if(!requireOk('reqForm')) return;
   if(!REQ_LINES.length){ toast('Add at least one material or service line before submitting.','er'); switchTab('cr',2); return; }
   if(REQ_LINES.some(function(l){ return l.qty<=0; })){ toast('Every line needs a quantity greater than zero.','er'); switchTab('cr',2); return; }
@@ -2518,6 +2607,16 @@ function saveReq(status){
   var budget = avail===0 ? 'Pending' : (avail>=v ? 'Available':'Not Available');
   if(status==='Submitted' && budget==='Not Available'){
     toast('Cannot submit \u2014 the budget check failed for this requisition.','er'); switchTab('cr',3); return;
+  }
+  var storeObj = byId(DB.stores,'store_name', val('rLoc'));
+  if(!storeObj){ toast('Select a valid delivery location before saving.','er'); switchTab('cr',1); return; }
+  var payloadLines = [];
+  for(var i=0;i<REQ_LINES.length;i++){
+    var l = REQ_LINES[i];
+    if(l.kind!=='Material'){ toast('Service lines cannot be saved yet \u2014 the backend requires a catalogued material for every line.','er'); switchTab('cr',2); return; }
+    var matObj = byId(DB.materials,'code', l.mat);
+    if(!matObj){ toast('Could not resolve material "'+esc(l.mat)+'" against the master data.','er'); switchTab('cr',2); return; }
+    payloadLines.push({item_id: matObj.id, requested_qty: l.qty, est_unit_rate: l.rate, preferred_make: l.make, technical_spec: l.spec});
   }
   var rec = {
     id: uid('R'), no: val('rNo'), date: val('rDate'), dept: val('rDept'), office: val('rOffice'),
@@ -2536,12 +2635,25 @@ function saveReq(status){
     var s = byId(DB.stock,'mat',l.mat); return s && (s.avail - s.reserved) >= l.qty;
   }).length;
   rec.stockAvail = covered===rec.lines.length ? 'Available' : (covered? 'Partially Available':'Not Available');
-  DB.requisitions.unshift(rec);
-  logAudit('Requisition', rec.no, status==='Draft'?'Draft Saved':'Submitted','Status','\u2014',status,rec.purpose.slice(0,80));
-  if(status==='Submitted') notify('in','Requisition '+rec.no+' submitted','Awaiting approval by '+rec.approver,'req/approvals');
-  save();
-  toast(status==='Draft'? 'Saved <b>'+esc(rec.no)+'</b> as a draft.' : 'Submitted <b>'+esc(rec.no)+'</b> for approval.','ok');
-  goto('req/list');
+  var payload = {req_date: val('rDate'), store_id: storeObj.id, priority: val('rPriority'), purpose: val('rPurpose'), lines: payloadLines};
+  try {
+    var res = await fetch(API_BASE+'/requisitions/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the requisition ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    rec.id = created.id; rec.no = created.req_no || rec.no;
+    if(status==='Submitted'){
+      var stRes = await fetch(API_BASE+'/requisitions/'+created.id+'/status', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'review'})});
+      if(!stRes.ok) toast('Requisition saved, but the workflow-stage update failed.','wa');
+    }
+    DB.requisitions.unshift(rec);
+    logAudit('Requisition', rec.no, status==='Draft'?'Draft Saved':'Submitted','Status','\u2014',status,rec.purpose.slice(0,80));
+    if(status==='Submitted') notify('in','Requisition '+rec.no+' submitted','Awaiting approval by '+rec.approver,'req/approvals');
+    save();
+    toast((status==='Draft'? 'Saved <b>'+esc(rec.no)+'</b> as a draft' : 'Submitted <b>'+esc(rec.no)+'</b> for approval')+' to PostgreSQL (id '+created.id+').','ok');
+    goto('req/list');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  }
 }
 
 /* ---------- consolidation ---------- */
@@ -2590,16 +2702,26 @@ function createConsolidatedPlan(){
   var v = sum(sel,'value');
   confirmAct({title:'Create consolidated procurement plan', ok:'Create plan', btnClass:'pri', reason:true,
     message:'One procurement plan is raised covering '+sel.length+' material line(s) worth <b>'+inr(v)+'</b>.'},
-    function(reason){
+    async function(reason){
       var allReqs = [];
       sel.forEach(function(s){ s.reqs.forEach(function(x){ if(allReqs.indexOf(x)<0) allReqs.push(x); }); });
-      var no = 'PP/DIT/2026/'+pad(30+DB.plans.length,4);
-      DB.plans.push({id:uid('PP'), no:no, reqs:allReqs.join(', '),
-        mode: v>2500000?'Open Tender':'Limited Tender', value:v, officer:'Anil Katwale', budget:COA[0],
-        ref:'\u2014', expected: addDays(TODAY,50), insp:'Yes', warr:'Yes', asset:'Yes', status:'Draft'});
-      logAudit('Procurement Plan', no,'Created','Status','\u2014','Draft',reason);
-      save(); toast('Created consolidated plan <b>'+esc(no)+'</b>.','ok');
-      goto('proc/plan');
+      var reqIds = allReqs.map(function(no){ var r = byId(DB.requisitions,'no',no); return r ? r.id : null; }).filter(function(x){ return x!==null; });
+      if(!reqIds.length){ toast('Could not resolve the underlying requisitions against the master data.','er'); return; }
+      try {
+        var res = await fetch(API_BASE+'/requisitions/consolidate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({req_ids: reqIds})});
+        if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the consolidation ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+        var created = await res.json();
+        var no = created.plan_no;
+        DB.plans.push({id:uid('PP'), no:no, reqs:allReqs.join(', '),
+          mode: v>2500000?'Open Tender':'Limited Tender', value:v, officer:'Anil Katwale', budget:COA[0],
+          ref:'\u2014', expected: addDays(TODAY,50), insp:'Yes', warr:'Yes', asset:'Yes', status:'Draft'});
+        allReqs.forEach(function(no){ var r = byId(DB.requisitions,'no',no); if(r) r.status = 'Procurement Initiated'; });
+        logAudit('Procurement Plan', no,'Created','Status','\u2014','Draft',reason);
+        save(); toast('Created consolidated plan <b>'+esc(no)+'</b> in PostgreSQL.','ok');
+        goto('proc/plan');
+      } catch(err) {
+        toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+      }
     });
 }
 
@@ -2647,15 +2769,24 @@ function planToTender(id){
   if(p.status!=='Approved'){ toast('Approve the plan before raising a tender.','wa'); return; }
   confirmAct({title:'Create tender from plan', ok:'Create tender', btnClass:'pri', reason:true,
     message:'A tender is created against <b>'+esc(p.no)+'</b> and published on the selected portal.'},
-    function(reason){
-      var no = 'TND/2026/'+(10120+DB.tenders.length);
-      DB.tenders.unshift({id:uid('T'), no:no, title:'Procurement against plan '+p.no, date:TODAY, mode:p.mode,
-        dept:DEPTS[0], value:p.value, fee: p.value>2500000?5000:2000, emd: Math.round(p.value*0.02),
-        close: addDays(TODAY,28), status:'Published', portal:'GNCTD e-Procurement Portal', coa:p.budget});
-      p.ref = no;
-      logAudit('Tender', no,'Created','Status','\u2014','Published',reason);
-      save(); toast('Created and published tender <b>'+esc(no)+'</b>.','ok');
-      goto('proc/tender');
+    async function(reason){
+      var fee = p.value>2500000?5000:2000, emd = Math.round(p.value*0.02);
+      var payload = {tender_title: 'Procurement against plan '+p.no, estimated_cost: p.value, tender_fee: fee, emd_amount: emd, bidding_days: 28};
+      try {
+        var res = await fetch(API_BASE+'/procurement/tenders', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+        if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the tender ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+        var created = await res.json();
+        var no = created.tender_no;
+        DB.tenders.unshift({id:created.id, no:no, title:payload.tender_title, date:TODAY, mode:p.mode,
+          dept:DEPTS[0], value:p.value, fee:fee, emd:emd,
+          close: addDays(TODAY,28), status:'Published', portal:'GNCTD e-Procurement Portal', coa:p.budget});
+        p.ref = no;
+        logAudit('Tender', no,'Created','Status','\u2014','Published',reason);
+        save(); toast('Created and published tender <b>'+esc(no)+'</b> in PostgreSQL (id '+created.id+').','ok');
+        goto('proc/tender');
+      } catch(err) {
+        toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+      }
     });
 }
 
@@ -2775,7 +2906,7 @@ function quoteEntry(){
   modal({title:'Record vendor quotation', size:'lg',
     body:'<div id="qeForm"><div class="fgrid g3">'+
       fld({id:'qeT', label:'Tender / quotation reference', type:'select', opts:DB.tenders.map(function(t){ return t.no; }), req:true})+
-      fld({id:'qeV', label:'Vendor', type:'select', opts:VENDORS.map(function(v){ return {v:v.code,l:v.name}; }), req:true})+
+      fld({id:'qeV', label:'Vendor', type:'select', opts:DB.vendors.map(function(v){ return {v:v.party_code,l:v.party_name}; }), req:true})+
       fld({id:'qeNo', label:'Bid number', val:'BID/2026/'+pad(4200+DB.quotes.length*7,5), req:true})+
       fld({id:'qeDate', label:'Submission date', type:'date', val:TODAY, req:true, date:true})+
       fld({id:'qeVal', label:'Bid validity', type:'date', val:'2026-12-31', date:true})+
@@ -2804,12 +2935,16 @@ function qeCalc(){
   var tot = basic+tax+nval('qeFr')+nval('qeIns')+nval('qeInst')+nval('qeOth')-nval('qeDis');
   setVal('qeTot', tot.toFixed(2));
 }
-function saveQuote(){
+async function saveQuote(){
   if(!requireOk('qeForm')) return;
   qeCalc();
   var tot = Number(val('qeTot'));
   if(tot<=0){ toast('The total quoted value must be greater than zero.','er'); return; }
   var basic = nval('qeQty')*nval('qeRate');
+  var tenderObj = byId(DB.tenders,'no', val('qeT'));
+  var vendorObj = byId(DB.vendors,'party_code', val('qeV'));
+  var matObj = byId(DB.materials,'code', val('qeMat'));
+  if(!tenderObj || !vendorObj){ toast('Could not resolve tender or vendor against the master data.','er'); return; }
   var rec = {id:uid('Q'), no:val('qeNo'), tender:val('qeT'), vendor:val('qeV'), sub:val('qeDate'),
     tech:'Pending', fin:'Opened', basic:basic, tax:Math.round(basic*nval('qeTax')/100), freight:nval('qeFr'),
     insurance:nval('qeIns'), install:nval('qeInst'), other:nval('qeOth'), discount:nval('qeDis'),
@@ -2817,10 +2952,20 @@ function saveQuote(){
     validity:val('qeVal'), rank:0, reco:'', status:'Under Review', score:0,
     deviations:val('qeDev'), elig:'To be examined', docs:'To be verified', qcert:'\u2014',
     capacity:'\u2014', past:'\u2014', remarks:val('qeRem')};
-  DB.quotes.push(rec);
-  logAudit('Quotation', rec.no,'Recorded','Status','\u2014','Under Review','Bid entered by procurement officer');
-  closeModal(); save(); toast('Recorded quotation <b>'+esc(rec.no)+'</b>.','ok');
-  goto('proc/quotes');
+  var payload = {tender_id: tenderObj.id, party_id: vendorObj.id, item_id: matObj ? matObj.id : undefined,
+    quoted_qty: nval('qeQty'), basic_rate: nval('qeRate'), gst_percent: nval('qeTax')};
+  try {
+    var res = await fetch(API_BASE+'/procurement/quotes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the quotation ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    rec.id = created.id;
+    DB.quotes.push(rec);
+    logAudit('Quotation', rec.no,'Recorded','Status','\u2014','Under Review','Bid entered by procurement officer');
+    closeModal(); save(); toast('Recorded quotation <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+').','ok');
+    goto('proc/quotes');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  }
 }
 
 /* ---------- technical evaluation ---------- */
@@ -2863,16 +3008,22 @@ function paintEval(){
     '</div></div>';
     }).join('')+'</div>';
 }
-function saveEval(id){
+async function saveEval(id){
   var q = byId(DB.quotes,'id',id);
   var oldT = q.tech;
-  q.score = Number(val('ev_s_'+id))||0;
-  q.tech = val('ev_t_'+id);
-  q.remarks = val('ev_r_'+id);
+  var score = Number(val('ev_s_'+id))||0;
+  var tech = val('ev_t_'+id);
+  var remarks = val('ev_r_'+id);
+  var payload = {is_technically_ok: tech==='Qualified', eval_remarks: 'Score: '+score+'/100. '+(remarks||'')};
+  try {
+    var res = await fetch(API_BASE+'/procurement/quotes/'+q.id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the evaluation ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+  } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
+  q.score = score; q.tech = tech; q.remarks = remarks;
   if(q.tech==='Disqualified'){ q.status='Rejected'; q.evaluated=0; }
   else if(q.tech==='Qualified'){ q.status='Under Review'; q.evaluated = q.amount - q.discount; }
   logAudit('Vendor Evaluation', q.no,'Evaluated','Technical Status',oldT,q.tech, q.remarks||'Technical evaluation recorded');
-  commit('Saved the evaluation for <b>'+esc(vname(q.vendor))+'</b>.','ok');
+  commit('Saved the evaluation for <b>'+esc(vname(q.vendor))+'</b> in PostgreSQL.','ok');
   paintEval();
 }
 function finishEval(){
@@ -2884,7 +3035,7 @@ function finishEval(){
     function(reason){
       var tn = byId(DB.tenders,'no',t); if(tn) tn.status='Under Evaluation';
       logAudit('Tender', t,'Technical Evaluation Completed','Status','Bid Opened','Under Evaluation',reason);
-      save(); toast('Technical evaluation completed for <b>'+esc(t)+'</b>.','ok');
+      save(); toast('Technical evaluation completed for <b>'+esc(t)+'</b> (stage tracked locally — the backend has no separate evaluation-stage field; it already reflects a tender with recorded bids as under evaluation).','ok');
       goto('proc/cs');
     });
 }
@@ -2952,38 +3103,60 @@ function paintCs(){
       (tn.value ? pct(tn.value-q1[0].evaluated, tn.value).toFixed(1)+'% below the estimated tender value' : 'within the estimate')+
       '. Delivery '+q1[0].delivery+' days, warranty '+q1[0].warranty+' months.</div></div></div>' : '');
 }
-function autoL1(){
+async function autoL1(){
   var t = val('csT');
   var bids = DB.quotes.filter(function(q){ return q.tender===t && q.tech==='Qualified'; }).sort(function(a,b){ return a.evaluated-b.evaluated; });
   if(!bids.length){ toast('No technically qualified bid is available for L1 determination.','wa'); return; }
+  var failed = 0;
+  for(var i=0;i<bids.length;i++){
+    try {
+      var res = await fetch(API_BASE+'/procurement/quotes/'+bids[i].id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({rank_order: i+1})});
+      if(!res.ok) failed++;
+    } catch(err) { failed++; }
+  }
   DB.quotes.filter(function(q){ return q.tender===t; }).forEach(function(q){ q.rank=0; q.reco=''; });
   bids.forEach(function(b,i){ b.rank = i+1; if(i===0) b.reco='Recommended'; });
   logAudit('Comparative Statement', t,'L1 Determined','Rank','\u2014','L1: '+vname(bids[0].vendor),'Lowest evaluated cost');
-  commit('L1 is <b>'+esc(vname(bids[0].vendor))+'</b> at '+inr(bids[0].evaluated)+'.','ok');
+  commit('L1 is <b>'+esc(vname(bids[0].vendor))+'</b> at '+inr(bids[0].evaluated)+' \u2014 ranks saved in PostgreSQL'+(failed?' ('+failed+' failed)':'')+'.', failed?'wa':'ok');
   paintCs();
 }
 function selectVendor(id){
   var q = byId(DB.quotes,'id',id);
+  var t = byId(DB.tenders,'no',q.tender);
+  var vendorObj = byId(DB.vendors,'party_code', q.vendor);
   confirmAct({title:'Select vendor for award', ok:'Select and create work order', btnClass:'ok', reason:true,
     message:'<b>'+esc(vname(q.vendor))+'</b> is recommended for award against '+esc(q.tender)+' at '+inr(q.evaluated)+'.'},
-    function(reason){
+    async function(reason){
+      if(!t || !vendorObj){ toast('Could not resolve the tender or vendor against the master data.','er'); return; }
+      try {
+        var res = await fetch(API_BASE+'/procurement/tenders/'+t.id+'/award', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({party_id: vendorObj.id})});
+        if(!res.ok){ var e = await res.text(); toast('Award failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+      } catch(err) {
+        toast('Award failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
+      }
       DB.quotes.filter(function(x){ return x.tender===q.tender; }).forEach(function(x){
         x.reco = x.id===id? 'Recommended':'Not Recommended'; x.status = x.id===id? 'Approved':'Rejected';
       });
-      var t = byId(DB.tenders,'no',q.tender); if(t) t.status='Awarded';
+      if(t) t.status='Awarded';
       logAudit('Comparative Statement', q.tender,'Vendor Selected','Recommended Vendor','\u2014',vname(q.vendor),reason);
-      commit('Selected <b>'+esc(vname(q.vendor))+'</b> for award. Create the work order to proceed.','ok');
+      commit('Selected <b>'+esc(vname(q.vendor))+'</b> for award in PostgreSQL. Create the work order to proceed.','ok');
       paintCs();
       setTimeout(function(){ goto('wo/create'); }, 800);
     });
 }
-function splitAward(id){
+async function splitAward(id){
   var q = byId(DB.quotes,'id',id);
   confirmAct({title:'Split award', kind:'wa', ok:'Record split award', reason:true,
     message:'A split award is recorded for <b>'+esc(vname(q.vendor))+'</b>. State the quantity split and the justification.'},
-    function(reason){ q.reco='Split Award'; q.status='Approved';
+    async function(reason){
+      try {
+        var res = await fetch(API_BASE+'/procurement/quotes/'+q.id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({is_selected:true, eval_remarks:'Split award: '+reason})});
+        if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+      } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
+      q.reco='Split Award'; q.status='Approved';
       logAudit('Comparative Statement', q.tender,'Split Award','Recommendation','\u2014','Split Award',reason);
-      commit('Recorded a split award for <b>'+esc(vname(q.vendor))+'</b>.','ok'); paintCs(); });
+      commit('Recorded a split award for <b>'+esc(vname(q.vendor))+'</b> in PostgreSQL.','ok'); paintCs();
+    });
 }
 function recordNegotiation(){
   var t = val('csT');
@@ -2998,31 +3171,36 @@ function recordNegotiation(){
       fld({id:'ngR', label:'Minutes / justification', type:'textarea', rows:3, req:true})+'</div></div>',
     footer:'<button class="btn" data-close>Cancel</button><button class="btn pri" onclick="saveNegotiation()">Record negotiation</button>'});
 }
-function saveNegotiation(){
+async function saveNegotiation(){
   if(!requireOk('ngForm')) return;
   var q = byId(DB.quotes,'id',val('ngV'));
   var old = q.evaluated;
-  q.evaluated = nval('ngA'); q.status='Under Review';
+  var newAmt = nval('ngA');
+  try {
+    var res = await fetch(API_BASE+'/procurement/quotes/'+q.id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({total_bid_value:newAmt, eval_remarks:'Negotiated on '+val('ngD')+' by '+val('ngB')+'. '+val('ngR')})});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the negotiation ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+  } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
+  q.evaluated = newAmt; q.status='Under Review';
   logAudit('Comparative Statement', q.tender,'Negotiation Recorded','Evaluated Amount',inr(old),inr(q.evaluated),val('ngR'));
-  closeModal(); commit('Recorded the negotiation for <b>'+esc(vname(q.vendor))+'</b>. Recalculate L1.','ok');
+  closeModal(); commit('Recorded the negotiation for <b>'+esc(vname(q.vendor))+'</b> in PostgreSQL. Recalculate L1.','ok');
   paintCs();
 }
 function recommendRetender(){
   var t = val('csT');
   confirmAct({title:'Recommend re-tender', kind:'er', btnClass:'dgr', ok:'Recommend re-tender', reason:true,
-    message:'Tender <b>'+esc(t)+'</b> is recommended for cancellation and re-tendering.'},
+    message:'Tender <b>'+esc(t)+'</b> is recommended for cancellation and re-tendering. Note: the backend has no re-tender/cancellation status field for tenders, so this is recorded locally and in the audit trail only.'},
     function(reason){
       var tn = byId(DB.tenders,'no',t); if(tn) tn.status='Re-Tender Recommended';
       logAudit('Tender', t,'Re-Tender Recommended','Status','Under Evaluation','Re-Tender Recommended',reason);
-      commit('Recommended re-tender for <b>'+esc(t)+'</b>.','wa'); paintCs();
+      commit('Recommended re-tender for <b>'+esc(t)+'</b> (local only — no backend status field for this).','wa'); paintCs();
     });
 }
 function submitCs(){
   var t = val('csT');
   confirmAct({title:'Submit comparative statement', ok:'Submit for approval', btnClass:'pri', reason:true,
-    message:'The comparative statement for <b>'+esc(t)+'</b> goes to the competent authority.'},
+    message:'The comparative statement for <b>'+esc(t)+'</b> goes to the competent authority. Note: the underlying evaluation scores, ranks and negotiated amounts are already saved to PostgreSQL as they were recorded; the "submission" step itself is an audit-trail entry only, since the backend has no CS-submission workflow endpoint.'},
     function(reason){ logAudit('Comparative Statement', t,'Submitted','Status','Draft','Submitted for Approval',reason);
-      commit('Submitted the comparative statement for approval.','ok'); });
+      commit('Submitted the comparative statement for approval (audit trail only).','ok'); });
 }
 function downloadCs(){
   var t = val('csT');
@@ -3179,10 +3357,16 @@ function releasePg(id){
     detail: kvRow('Work order', esc(p.wo))+kvRow('Amount', inr(p.amount))+
             kvRow('Release eligibility date', fdate(p.release))+
             kvRow('Open defects', openDefects.length? '<b style="color:#B91C1C">'+openDefects.length+'</b>':'None')},
-    function(reason){
+    async function(reason){
+      try {
+        var res = await fetch(API_BASE+'/procurement/securities/'+p.id+'/release', {method:'PUT'});
+        if(!res.ok){ var e = await res.text(); toast('Release failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+      } catch(err) {
+        toast('Release failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
+      }
       var old = p.status; p.status='Released';
       logAudit('Performance Guarantee', p.instrNo,'Released','Status',old,'Released',reason);
-      tblPaint('tPg'); commit('Released guarantee <b>'+esc(p.instrNo)+'</b>.','ok');
+      tblPaint('tPg'); commit('Released guarantee <b>'+esc(p.instrNo)+'</b> in PostgreSQL.','ok');
     });
 }
 function extendPg(id){
@@ -3246,7 +3430,7 @@ SCREENS['wo/create'] = function(){
       '</div>')+
     pane(g,1,'<div class="fgrid g3">'+
       fld({id:'wVendor', label:'Vendor', type:'select', req:true,
-           opts:VENDORS.map(function(v){ return {v:v.code, l:v.name}; }), onchange:'woVendorInfo()'})+
+           opts:DB.vendors.map(function(v){ return {v:v.party_code, l:v.party_name}; }), onchange:'woVendorInfo()'})+
       fld({id:'wContract', label:'Contract number', val:'CON/2026/'+pad(760+DB.workorders.length*5,5)})+
       fld({id:'wStore', label:'Consignee store', type:'select', opts:STORES, req:true})+
       '</div><div id="wVenBox" style="margin-top:11px"></div>')+
@@ -3294,7 +3478,8 @@ SCREENS['wo/create'] = function(){
 SCREENS_AFTER['wo/create'] = function(){ paintWoLines(); woVendorInfo(); woChain(); };
 function woVendorInfo(){
   var box = document.getElementById('wVenBox'); if(!box) return;
-  var v = byId(VENDORS,'code',val('wVendor'));
+  var raw = byId(DB.vendors,'party_code',val('wVendor'));
+  var v = raw ? {code:raw.party_code, name:raw.party_name, gstin:raw.gstin, cat:raw.party_type, city:'Delhi', rating:raw.party_rating||4.0} : null;
   if(!v){ box.innerHTML = '<div class="note in">Select a vendor to see the registration and performance summary.</div>'; return; }
   var wos = DB.workorders.filter(function(w){ return w.vendor===v.code; });
   var defs = DB.defects.filter(function(d){ return d.vendor===v.code && ['Resolved','Closed'].indexOf(d.status)<0; });
@@ -3415,12 +3600,23 @@ function woBudgetCheck(){
     toast('Budget check passed and funds committed.','ok');
   }, 700);
 }
-function saveWo(status){
+async function saveWo(status){
   if(!requireOk('woForm')) return;
   if(!WO_LINES.length){ toast('Add at least one order line.','er'); switchTab('cw',2); return; }
   var t = woTotals();
   if(status!=='Draft' && !Number(val('wAvail'))){
     toast('Run the budget check and commit funds before submitting.','er'); switchTab('cw',5); return;
+  }
+  var vendorObj = byId(DB.vendors,'party_code', val('wVendor'));
+  var storeObj = byId(DB.stores,'store_name', val('wStore'));
+  if(!vendorObj){ toast('Select a valid vendor before saving.','er'); switchTab('cw',1); return; }
+  if(!storeObj){ toast('Select a valid delivery store before saving.','er'); switchTab('cw',1); return; }
+  var payloadLines = [];
+  for(var i=0;i<WO_LINES.length;i++){
+    var l = WO_LINES[i];
+    var matObj = byId(DB.materials,'code', l.mat);
+    if(!matObj){ toast('Could not resolve material "'+esc(l.mat)+'" against the master data.','er'); switchTab('cw',2); return; }
+    payloadLines.push({item_id: matObj.id, order_qty: l.qty, unit_rate: l.rate, tax_percent: l.taxPct});
   }
   var rec = {
     id: uid('W'), no: val('wNo'), date: val('wDate'), vendor: val('wVendor'),
@@ -3436,27 +3632,51 @@ function saveWo(status){
     budgetOk: !!Number(val('wAvail')), amendments: 0,
     attachments: attList('wAtt'), terms: val('wTerms')
   };
-  DB.workorders.unshift(rec);
-  DB.deliveries.unshift({
-    id: uid('D'), wo: rec.no, vendor: rec.vendor, mat: rec.lines[0].mat,
-    ordered: sum(rec.lines,'qty'), delivered:0, pending: sum(rec.lines,'qty'),
-    dispatch:'', expected: rec.due, actual:'', delay:0, challan:'', transporter:'',
-    status:'Not Dispatched', store: rec.store
-  });
-  if(rec.pg>0){
-    DB.pgs.push({id:uid('P'), wo:rec.no, contract:val('wContract'), vendor:rec.vendor, amount:rec.pg,
-      pctv:nval('wPgPct'), instrType:'Bank Guarantee', instrNo:'PBG/'+pad(88500+DB.pgs.length*23,7),
-      bank:'State Bank of India', issue:rec.date, expiry: addDays(rec.due, 420),
-      claim:'6 months beyond warranty', verify:'Under Verification',
-      release: addDays(rec.due, 380), status:'Received'});
+  var payload = {party_id: vendorObj.id, store_id: storeObj.id, delivery_due_date: val('wDue'), payment_terms: val('wPay'), lines: payloadLines};
+  try {
+    var res = await fetch(API_BASE+'/work-orders/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the work order ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    rec.id = created.id; rec.no = created.wo_no || rec.no;
+    DB.workorders.unshift(rec);
+    DB.deliveries.unshift({
+      id: uid('D'), wo: rec.no, vendor: rec.vendor, mat: rec.lines[0].mat,
+      ordered: sum(rec.lines,'qty'), delivered:0, pending: sum(rec.lines,'qty'),
+      dispatch:'', expected: rec.due, actual:'', delay:0, challan:'', transporter:'',
+      status:'Not Dispatched', store: rec.store
+    });
+    if(rec.pg>0){
+      var pgInstrNo = 'PBG/'+pad(88500+DB.pgs.length*23,7);
+      var pgExpiry = addDays(rec.due, 420);
+      try {
+        var pgRes = await fetch(API_BASE+'/procurement/securities', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+          sec_type: 'PBG', wo_id: created.id, party_id: vendorObj.id, instrument_type: 'Bank Guarantee',
+          instrument_no: pgInstrNo, instrument_date: rec.date, expiry_date: pgExpiry, amount: rec.pg, issuing_bank: 'State Bank of India'
+        })});
+        if(pgRes.ok){
+          var pgCreated = await pgRes.json();
+          DB.pgs.push({id:pgCreated.id, wo:rec.no, contract:val('wContract'), vendor:rec.vendor, amount:rec.pg,
+            pctv:nval('wPgPct'), instrType:'Bank Guarantee', instrNo:pgInstrNo,
+            bank:'State Bank of India', issue:rec.date, expiry: pgExpiry,
+            claim:'6 months beyond warranty', verify:'Under Verification',
+            release: addDays(rec.due, 380), status:'Received'});
+        } else {
+          toast('Work order saved, but the performance guarantee could not be registered in PostgreSQL.','wa');
+        }
+      } catch(err) {
+        toast('Work order saved, but the performance guarantee could not reach the backend API.','wa');
+      }
+    }
+    var r = byId(DB.requisitions,'no',rec.req);
+    if(r && r.status==='Approved'){ r.status = 'Procurement Initiated'; }
+    logAudit('Work Order', rec.no, status==='Draft'?'Draft Saved':'Created','Status','\u2014',status,'Order raised on '+vname(rec.vendor));
+    if(status!=='Draft') notify('in','Work order '+rec.no+' created','Issued to '+vname(rec.vendor)+' for '+inr(rec.value),'wo/list');
+    save();
+    toast((status==='Draft'? 'Saved <b>'+esc(rec.no)+'</b> as a draft' : 'Created <b>'+esc(rec.no)+'</b> for '+inr(rec.value))+' in PostgreSQL (id '+created.id+').','ok');
+    goto('wo/list');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
   }
-  var r = byId(DB.requisitions,'no',rec.req);
-  if(r && r.status==='Approved'){ r.status = 'Procurement Initiated'; }
-  logAudit('Work Order', rec.no, status==='Draft'?'Draft Saved':'Created','Status','\u2014',status,'Order raised on '+vname(rec.vendor));
-  if(status!=='Draft') notify('in','Work order '+rec.no+' created','Issued to '+vname(rec.vendor)+' for '+inr(rec.value),'wo/list');
-  save();
-  toast(status==='Draft'? 'Saved <b>'+esc(rec.no)+'</b> as a draft.' : 'Created <b>'+esc(rec.no)+'</b> for '+inr(rec.value)+'.','ok');
-  goto('wo/list');
 }
 
 /* ---------- work order register ---------- */
@@ -3475,7 +3695,7 @@ SCREENS['wo/list'] = function(){
   ])+
   filterBar([
     fld({id:'fwNo', label:'Work order number', ph:'WO/'}),
-    fld({id:'fwVendor', label:'Vendor', type:'select', opts:VENDORS.map(function(v){ return {v:v.code,l:v.name}; }), blank:'All'}),
+    fld({id:'fwVendor', label:'Vendor', type:'select', opts:DB.vendors.map(function(v){ return {v:v.party_code,l:v.party_name}; }), blank:'All'}),
     fld({id:'fwDept', label:'Department', type:'select', opts:DEPTS, blank:'All'}),
     fld({id:'fwStatus', label:'Status', type:'select', opts:['Draft','Approved','Issued','Delivered','Delayed','Closed','Cancelled'], blank:'All'}),
     fld({id:'fwFrom', label:'From date', type:'date'}),
@@ -3650,28 +3870,57 @@ function amendWo(id){
     footer:'<button class="btn" data-close>Cancel</button>'+
       '<button class="btn pri" onclick="saveAmendment(\''+id+'\')">Issue amendment</button>'});
 }
-function saveAmendment(id){
+function amToISODate(s){
+  if(!s) return undefined;
+  s = String(s).trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  var m = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if(m) return m[3]+'-'+m[2]+'-'+m[1];
+  var d = new Date(s);
+  if(!isNaN(d)) return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  return undefined;
+}
+function amToNumber(s){
+  if(s===undefined || s===null || s==='') return undefined;
+  var n = Number(String(s).replace(/,/g,''));
+  return isNaN(n) ? undefined : n;
+}
+async function saveAmendment(id){
   if(!requireOk('amForm')) return;
   var w = byId(DB.workorders,'id',id);
-  var no = 'AMD/2026/'+pad(10+DB.amendments.length,4);
   var type = val('amType');
-  DB.amendments.push({id:uid('AM'), no:no, wo:w.no, date:val('amDate'), type:type,
-    field: type==='Delivery Extension'? 'Delivery Due Date' : type,
-    oldv: val('amOld'), newv: val('amNew'), value:0, reason: val('amReason'),
-    authority: val('amAuth'), status:'Approved'});
-  if(type==='Delivery Extension'){
-    var old = w.due; w.due = val('amNew');
-    var d = DB.deliveries.filter(function(x){ return x.wo===w.no; })[0];
-    if(d){ d.expected = w.due; if(d.status==='Delayed') d.status='Not Dispatched'; d.delay = 0; }
-    logAudit('Work Order', w.no,'Amended','Delivery Due Date', fdate(old), fdate(w.due), val('amReason'));
-  } else {
-    logAudit('Work Order', w.no,'Amended', type, val('amOld'), val('amNew'), val('amReason'));
+  var isDelivery = type==='Delivery Extension';
+  var newDeliveryDate = isDelivery ? amToISODate(val('amNew')) : undefined;
+  if(isDelivery && !newDeliveryDate){ toast('Enter the revised delivery date as DD-MM-YYYY.','er'); return; }
+  var payload = {amend_type: type,
+    old_value: isDelivery ? undefined : amToNumber(val('amOld')),
+    new_value: isDelivery ? undefined : amToNumber(val('amNew')),
+    reason: val('amReason'), new_delivery_date: newDeliveryDate};
+  try {
+    var res = await fetch(API_BASE+'/work-orders/'+w.id+'/amendments', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the amendment ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    var no = created.amend_no || ('AMD/2026/'+pad(10+DB.amendments.length,4));
+    DB.amendments.push({id:uid('AM'), no:no, wo:w.no, date:val('amDate'), type:type,
+      field: type==='Delivery Extension'? 'Delivery Due Date' : type,
+      oldv: val('amOld'), newv: val('amNew'), value:0, reason: val('amReason'),
+      authority: val('amAuth'), status:'Approved'});
+    if(type==='Delivery Extension'){
+      var old = w.due; w.due = val('amNew');
+      var d = DB.deliveries.filter(function(x){ return x.wo===w.no; })[0];
+      if(d){ d.expected = w.due; if(d.status==='Delayed') d.status='Not Dispatched'; d.delay = 0; }
+      logAudit('Work Order', w.no,'Amended','Delivery Due Date', fdate(old), fdate(w.due), val('amReason'));
+    } else {
+      logAudit('Work Order', w.no,'Amended', type, val('amOld'), val('amNew'), val('amReason'));
+    }
+    w.amendments = (w.amendments||0)+1;
+    if(w.status!=='Draft') w.status = 'Amended';
+    closeModal(); save();
+    if(TBL.tWo) tblReload('tWo', DB.workorders);
+    toast('Issued amendment <b>'+esc(no)+'</b> against '+esc(w.no)+' in PostgreSQL.','ok');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
   }
-  w.amendments = (w.amendments||0)+1;
-  if(w.status!=='Draft') w.status = 'Amended';
-  closeModal(); save();
-  if(TBL.tWo) tblReload('tWo', DB.workorders);
-  toast('Issued amendment <b>'+esc(no)+'</b> against '+esc(w.no)+'.','ok');
 }
 function printWo(id){
   var w = byId(DB.workorders,'id',id);
@@ -3858,7 +4107,7 @@ SCREENS['grn/list'] = function(){
   filterBar([
     fld({id:'fgNo', label:'GRN number', ph:'GRN/'}),
     fld({id:'fgWo', label:'Work order', ph:'WO/'}),
-    fld({id:'fgVendor', label:'Vendor', type:'select', opts:VENDORS.map(function(v){ return {v:v.code,l:v.name}; }), blank:'All'}),
+    fld({id:'fgVendor', label:'Vendor', type:'select', opts:DB.vendors.map(function(v){ return {v:v.party_code,l:v.party_name}; }), blank:'All'}),
     fld({id:'fgStore', label:'Store', type:'select', opts:STORES, blank:'All'}),
     fld({id:'fgInsp', label:'Inspection', type:'select', opts:['Pending','Under Inspection','Accepted','Accepted with Deviation','Rejected'], blank:'All'}),
     fld({id:'fgPost', label:'Posting', type:'select', opts:['Pending','Posted'], blank:'All'})
@@ -3942,7 +4191,7 @@ function grnEntry(woNo){
 function grnWoInfo(){
   var box = document.getElementById('grWoBox'); if(!box) return;
   var w = byId(DB.workorders,'no',val('grWo'));
-  if(!w){ box.innerHTML = '<div class="note in">Select a work order to load the ordered quantity and consignee.</div>'; return; }
+  if(!w || !w.lines || !w.lines.length){ box.innerHTML = '<div class="note in">Select a work order to load the ordered quantity and consignee.</div>'; return; }
   var already = sum(DB.grns.filter(function(g){ return g.wo===w.no; }),'received');
   var ordered = sum(w.lines,'qty');
   box.innerHTML = '<div class="grid g4">'+
@@ -3965,7 +4214,7 @@ function grnCalc(){
   var msgs = [];
   if(acc + rej > recd) msgs.push(['er','Accepted plus rejected quantity ('+num(acc+rej)+') exceeds the received quantity ('+num(recd)+').']);
   if(dam > recd) msgs.push(['er','Damaged quantity cannot exceed the received quantity.']);
-  if(w){
+  if(w && w.lines && w.lines.length){
     var ordered = sum(w.lines,'qty');
     var already = sum(DB.grns.filter(function(g){ return g.wo===w.no; }),'received');
     var bal = ordered - already;
@@ -3978,12 +4227,18 @@ function grnCalc(){
   }
   out.innerHTML = msgs.map(function(m){ return '<div class="note '+m[0]+'" style="margin-bottom:6px">'+m[1]+'</div>'; }).join('');
 }
-function saveGrn(){
+async function saveGrn(){
   if(!requireOk('grForm')) return;
   var w = byId(DB.workorders,'no',val('grWo'));
+  if(!w){ toast('Select a valid work order before saving.','er'); return; }
+  if(!w.lines || !w.lines.length){ toast('The selected work order has no line items to receive against.','er'); return; }
   var recd = nval('grRecd'), acc = nval('grAcc'), rej = nval('grRej');
   if(recd<=0){ toast('Received quantity must be greater than zero.','er'); return; }
   if(acc + rej > recd){ toast('Accepted plus rejected quantity cannot exceed the received quantity.','er'); return; }
+  var storeObj = byId(DB.stores,'store_name', val('grStore'));
+  if(!storeObj){ toast('Select a valid receiving store before saving.','er'); return; }
+  var matObj = byId(DB.materials,'code', w.lines[0].mat);
+  if(!matObj){ toast('Could not resolve the ordered material against the master data.','er'); return; }
   var rec = {
     id: uid('G'), no: val('grNo'), date: val('grDate'), wo: w.no, vendor: w.vendor, mat: w.lines[0].mat,
     received: recd, accepted: acc, rejected: rej, damaged: nval('grDam'),
@@ -3995,24 +4250,36 @@ function saveGrn(){
     posting: 'Pending', receiver: val('grReceiver'), remarks: val('grRemarks'),
     attachments: attList('grAtt')
   };
-  DB.grns.unshift(rec);
-  var d = DB.deliveries.filter(function(x){ return x.wo===w.no; })[0];
-  if(d){
-    d.delivered = Math.min(d.ordered, d.delivered + recd);
-    d.pending = Math.max(0, d.ordered - d.delivered);
-    d.status = d.pending===0 ? 'Delivered' : 'Partially Delivered';
-    if(d.pending===0) d.actual = rec.date;
+  var payload = {
+    wo_id: w.id, store_id: storeObj.id, challan_no: rec.challan, challan_date: rec.challanDate,
+    lines: [{item_id: matObj.id, challan_qty: recd, received_qty: recd}]
+  };
+  try {
+    var res = await fetch(API_BASE+'/grn/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the GRN ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    rec.id = created.id; rec.no = created.grn_no || rec.no;
+    DB.grns.unshift(rec);
+    var d = DB.deliveries.filter(function(x){ return x.wo===w.no; })[0];
+    if(d){
+      d.delivered = Math.min(d.ordered, d.delivered + recd);
+      d.pending = Math.max(0, d.ordered - d.delivered);
+      d.status = d.pending===0 ? 'Delivered' : 'Partially Delivered';
+      if(d.pending===0) d.actual = rec.date;
+    }
+    w.delivered = (d? d.delivered : w.delivered + recd);
+    w.deliveredValue = Math.round(w.delivered * w.lines[0].rate * 1.18);
+    logAudit('GRN', rec.no,'Created','Status','\u2014','Pending',
+      num(recd)+' received against '+w.no+' under challan '+rec.challan);
+    if(rec.inspection==='Pending') notify('wa','GRN '+rec.no+' awaiting inspection', num(recd)+' units received at '+rec.store,'grn/pending');
+    closeModal(); save();
+    if(TBL.tGrn) tblReload('tGrn', DB.grns);
+    refreshNavCounts();
+    toast('Recorded <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+'). '+(rec.inspection==='Pending'? 'Sent for inspection.':'Ready for posting.'),'ok');
+    goto('grn/list');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
   }
-  w.delivered = (d? d.delivered : w.delivered + recd);
-  w.deliveredValue = Math.round(w.delivered * w.lines[0].rate * 1.18);
-  logAudit('GRN', rec.no,'Created','Status','\u2014','Pending',
-    num(recd)+' received against '+w.no+' under challan '+rec.challan);
-  if(rec.inspection==='Pending') notify('wa','GRN '+rec.no+' awaiting inspection', num(recd)+' units received at '+rec.store,'grn/pending');
-  closeModal(); save();
-  if(TBL.tGrn) tblReload('tGrn', DB.grns);
-  refreshNavCounts();
-  toast('Recorded <b>'+esc(rec.no)+'</b>. '+(rec.inspection==='Pending'? 'Sent for inspection.':'Ready for posting.'),'ok');
-  goto('grn/list');
 }
 function viewGrn(id){
   var g = byId(DB.grns,'id',id);
@@ -4064,7 +4331,13 @@ function postGrn(id){
     message:'The accepted quantity is added to stock at <b>'+esc(g.store)+'</b> and a movement entry is created.',
     detail: kvRow('Material', esc(g.mat))+kvRow('Accepted quantity', num(g.accepted))+
             kvRow('Store', esc(g.store))+kvRow('Value', inr(g.accepted*w.lines[0].rate))},
-    function(reason){
+    async function(reason){
+      try {
+        var res = await fetch(API_BASE+'/grn/'+g.id+'/post-to-stock', {method:'PUT'});
+        if(!res.ok){ var e = await res.text(); toast('Post failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+      } catch(err) {
+        toast('Post failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
+      }
       g.posting = 'Posted';
       var s = DB.stock.filter(function(x){ return x.mat===g.mat && x.store===g.store; })[0];
       if(s){ s.avail += g.accepted; }
@@ -4087,7 +4360,7 @@ function postGrn(id){
       closeAllModals();
       if(TBL.tGrn) tblReload('tGrn', DB.grns);
       refreshNavCounts();
-      commit('Posted <b>'+num(g.accepted)+'</b> unit(s) of '+esc(g.mat)+' to '+esc(g.store)+'.','ok');
+      commit('Posted <b>'+num(g.accepted)+'</b> unit(s) of '+esc(g.mat)+' to '+esc(g.store)+' in PostgreSQL.','ok');
     });
 }
 
@@ -4161,7 +4434,7 @@ function inspCalc(id){
     out.innerHTML = '<div class="note ok">Full acceptance. The quantity becomes available for posting to inventory.</div>';
   }
 }
-function saveInspection(id, outcome){
+async function saveInspection(id, outcome){
   if(!requireOk('inForm')) return;
   var g = byId(DB.grns,'id',id);
   var acc = outcome==='Rejected' ? 0 : nval('inAcc');
@@ -4176,24 +4449,33 @@ function saveInspection(id, outcome){
     nc: val('inNc'), reco: val('inReco'),
     status: outcome==='Rejected' ? 'Rejected' : (rej>0 ? 'Accepted with Deviation':'Accepted')
   };
-  DB.inspections.unshift(rec);
-  var old = g.inspection;
-  g.inspection = rec.status; g.accepted = acc; g.rejected = rej;
-  if(rej>0){
-    DB.rtv.unshift({id:uid('RT'), no:'RTV/2026/'+pad(340+DB.rtv.length*4,5), grn:g.no, wo:g.wo,
-      vendor:g.vendor, mat:g.mat, qty:rej, rate:0, reason:'Rejected on inspection',
-      date: addDays(rec.date,1), mode:'Vendor pickup', replacement:'Replacement Pending',
-      ack:'Pending', status:'Replacement Pending'});
+  var payload = {passed_qty: acc, rejected_qty: rej, test_type: val('inCert')||undefined, rejection_reason: reason||undefined};
+  try {
+    var res = await fetch(API_BASE+'/grn/'+g.id+'/inspections', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the inspection ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    rec.no = created.insp_no || rec.no;
+    DB.inspections.unshift(rec);
+    var old = g.inspection;
+    g.inspection = created.overall_status || rec.status; g.accepted = acc; g.rejected = rej;
+    if(rej>0){
+      DB.rtv.unshift({id:uid('RT'), no:'RTV/2026/'+pad(340+DB.rtv.length*4,5), grn:g.no, wo:g.wo,
+        vendor:g.vendor, mat:g.mat, qty:rej, rate:0, reason:'Rejected on inspection',
+        date: addDays(rec.date,1), mode:'Vendor pickup', replacement:'Replacement Pending',
+        ack:'Pending', status:'Replacement Pending'});
+    }
+    logAudit('GRN', g.no,'Inspected','Inspection Status', old, g.inspection, reason);
+    if(rej>0) notify('wa','Inspection rejected quantity \u2014 '+g.no, num(rej)+' unit(s) to be returned to '+vname(g.vendor),'grn/rtv');
+    closeAllModals(); save();
+    ['tGrn','tGrnP','tIns'].forEach(function(t){
+      if(TBL[t]) tblReload(t, t==='tGrn'? DB.grns : (t==='tIns'? DB.inspections
+        : DB.grns.filter(function(x){ return x.inspection==='Pending'||x.inspection==='Under Inspection'; })));
+    });
+    refreshNavCounts();
+    toast('Inspection recorded in PostgreSQL for <b>'+esc(g.no)+'</b> \u2014 '+num(acc)+' accepted, '+num(rej)+' rejected.','ok');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
   }
-  logAudit('GRN', g.no,'Inspected','Inspection Status', old, g.inspection, reason);
-  if(rej>0) notify('wa','Inspection rejected quantity \u2014 '+g.no, num(rej)+' unit(s) to be returned to '+vname(g.vendor),'grn/rtv');
-  closeAllModals(); save();
-  ['tGrn','tGrnP','tIns'].forEach(function(t){
-    if(TBL[t]) tblReload(t, t==='tGrn'? DB.grns : (t==='tIns'? DB.inspections
-      : DB.grns.filter(function(x){ return x.inspection==='Pending'||x.inspection==='Under Inspection'; })));
-  });
-  refreshNavCounts();
-  toast('Inspection recorded for <b>'+esc(g.no)+'</b> \u2014 '+num(acc)+' accepted, '+num(rej)+' rejected.','ok');
 }
 
 /* ---------- inspection register ---------- */
@@ -4563,7 +4845,7 @@ function trStock(){
       num(Math.max(0,s.avail-s.reserved))+'</b>.</div>'
     : '<div class="note wa">No stock record for this material at the selected store.</div>';
 }
-function saveTransfer(){
+async function saveTransfer(){
   if(!requireOk('trForm')) return;
   if(val('trFrom')===val('trTo')){ toast('The source and destination stores must be different.','er'); return; }
   var src = DB.stock.filter(function(x){ return x.mat===val('trMat') && x.store===val('trFrom'); })[0];
@@ -4571,14 +4853,27 @@ function saveTransfer(){
   if(!src || (src.avail - src.reserved) < q){
     toast('Net available stock at the source store is not enough for this transfer.','er'); return;
   }
+  var fromObj = byId(DB.stores,'store_name', val('trFrom'));
+  var toObj = byId(DB.stores,'store_name', val('trTo'));
+  var matObj = byId(DB.materials,'code', val('trMat'));
+  if(!fromObj || !toObj || !matObj){ toast('Could not resolve store or material against the master data.','er'); return; }
   var rec = {id:uid('TR'), no:val('trNo'), date:val('trDate'), mat:val('trMat'), qty:q,
     uom:muom(val('trMat')), from:val('trFrom'), to:val('trTo'), approver:val('trApp'),
     challan:val('trChallan'), dispatched:'', received:'', status:'Pending'};
-  DB.transfers.unshift(rec);
-  logAudit('Stock Transfer', rec.no,'Created','Status','\u2014','Pending',val('trReason'));
-  closeModal(); save();
-  toast('Created transfer <b>'+esc(rec.no)+'</b>. Despatch it to move the stock.','ok');
-  goto('inv/transfer');
+  var payload = {from_store_id: fromObj.id, to_store_id: toObj.id, item_id: matObj.id, transfer_qty: q, dispatch_gatepass: rec.challan};
+  try {
+    var res = await fetch(API_BASE+'/inventory/transfers', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the transfer ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    rec.id = created.id; rec.no = created.transfer_no || rec.no;
+    DB.transfers.unshift(rec);
+    logAudit('Stock Transfer', rec.no,'Created','Status','\u2014','Pending',val('trReason'));
+    closeModal(); save();
+    toast('Created transfer <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+'). Despatch it to move the stock.','ok');
+    goto('inv/transfer');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  }
 }
 function despatchTransfer(id){
   var t = byId(DB.transfers,'id',id);
@@ -4593,14 +4888,20 @@ function despatchTransfer(id){
         value:t.qty*mrate(t.mat), ref:t.no, by:'Store Officer', status:'Approved'});
       logAudit('Stock Transfer', t.no,'Despatched','Status','Pending','In Transit',reason);
       tblReload('tTrf', DB.transfers);
-      commit('Despatched <b>'+esc(t.no)+'</b>.','ok');
+      commit('Despatched <b>'+esc(t.no)+'</b> (local only \u2014 the backend has no despatch stage; use Acknowledge receipt to complete the transfer in PostgreSQL).','wa');
     });
 }
-function receiveTransfer(id){
+async function receiveTransfer(id){
   var t = byId(DB.transfers,'id',id);
   confirmAct({title:'Acknowledge transfer receipt', ok:'Acknowledge receipt', btnClass:'ok', reason:true,
     message:'<b>'+esc(t.to)+'</b> acknowledges receipt of '+num(t.qty)+' unit(s) of '+esc(t.mat)+'.'},
-    function(reason){
+    async function(reason){
+      try {
+        var res = await fetch(API_BASE+'/inventory/transfers/'+t.id+'/receive', {method:'PUT'});
+        if(!res.ok){ var e = await res.text(); toast('Failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+      } catch(err) {
+        toast('Failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
+      }
       var src = DB.stock.filter(function(x){ return x.mat===t.mat && x.store===t.from; })[0];
       if(src) src.transit = Math.max(0, src.transit - t.qty);
       var dst = DB.stock.filter(function(x){ return x.mat===t.mat && x.store===t.to; })[0];
@@ -4613,7 +4914,7 @@ function receiveTransfer(id){
       t.received = TODAY; t.status = 'Received';
       logAudit('Stock Transfer', t.no,'Received','Status','In Transit','Received',reason);
       tblReload('tTrf', DB.transfers);
-      commit('Receipt acknowledged at <b>'+esc(t.to)+'</b>.','ok');
+      commit('Receipt acknowledged at <b>'+esc(t.to)+'</b> in PostgreSQL.','ok');
     });
 }
 
@@ -4680,40 +4981,38 @@ function isStock(){
       '</b> at '+esc(val('isStore'))+'.</div>'
     : '<div class="note wa">No stock record for this material at the selected store.</div>';
 }
-function saveIssue(){
+async function saveIssue(){
   if(!requireOk('isForm')) return;
   var s = DB.stock.filter(function(x){ return x.mat===val('isMat') && x.store===val('isStore'); })[0];
   var q = nval('isQty');
   if(!s || (s.avail - s.reserved) < q){ toast('Net available stock is not enough for this issue.','er'); return; }
+  var storeObj = byId(DB.stores,'store_name', val('isStore'));
+  var matObj = byId(DB.materials,'code', val('isMat'));
+  if(!storeObj || !matObj){ toast('Could not resolve store or material against the master data.','er'); return; }
   var rec = {id:uid('IS'), no:val('isNo'), date:val('isDate'), req:val('isReq')||'\u2014',
     mat:val('isMat'), qty:q, uom:muom(val('isMat')), rate:mrate(val('isMat')),
     store:val('isStore'), dept:val('isDept'), indentor:val('isIndentor'),
     recipient:val('isRecipient'), gatepass:val('isGate'), status:'Pending'};
-  DB.issues.unshift(rec);
-  logAudit('Stock Issue', rec.no,'Created','Status','\u2014','Pending',val('isPurpose'));
-  closeModal(); save();
-  toast('Created issue note <b>'+esc(rec.no)+'</b>. Confirm it to move the stock.','ok');
-  goto('inv/issue');
+  var payload = {store_id: storeObj.id, receiver_name: rec.recipient, lines: [{item_id: matObj.id, issued_qty: q, unit_rate: rec.rate}]};
+  try {
+    var res = await fetch(API_BASE+'/inventory/issues', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the issue ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    rec.id = created.id; rec.no = created.issue_no || rec.no;
+    rec.status = 'Issued';
+    s.avail -= q;
+    var m = byId(DB.materials,'code',rec.mat); if(m) m.stock = Math.max(0, m.stock - q);
+    DB.issues.unshift(rec);
+    logAudit('Stock Issue', rec.no,'Issued','Status','\u2014','Issued',val('isPurpose'));
+    closeModal(); save(); refreshNavCounts();
+    toast('Issued <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+'). Stock deducted immediately by the backend.','ok');
+    goto('inv/issue');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  }
 }
 function confirmIssue(id){
-  var i = byId(DB.issues,'id',id);
-  confirmAct({title:'Confirm stock issue', ok:'Issue material', btnClass:'ok', reason:true,
-    message:'<b>'+num(i.qty)+'</b> unit(s) of '+esc(i.mat)+' are issued from '+esc(i.store)+' to '+esc(i.dept)+'.',
-    detail: kvRow('Recipient', esc(i.recipient))+kvRow('Gate pass', esc(i.gatepass))+
-            kvRow('Issue value', inr(i.qty*i.rate))},
-    function(reason){
-      var s = DB.stock.filter(function(x){ return x.mat===i.mat && x.store===i.store; })[0];
-      if(!s || s.avail < i.qty){ toast('Stock has changed \u2014 the balance is no longer enough.','er'); return; }
-      s.avail -= i.qty;
-      var m = byId(DB.materials,'code',i.mat); if(m) m.stock = Math.max(0, m.stock - i.qty);
-      i.status = 'Issued';
-      DB.movements.unshift({id:uid('V'), no:'MOV/2026/'+pad(9500+DB.movements.length*3,6), date:TODAY,
-        mat:i.mat, type:'Issue to Department', src:i.store, dst:i.dept, qty:i.qty, uom:i.uom,
-        value:i.qty*i.rate, ref:i.no, by:'Store Officer', status:'Approved'});
-      logAudit('Stock Issue', i.no,'Issued','Status','Pending','Issued',reason);
-      tblReload('tIss', DB.issues); refreshNavCounts();
-      commit('Issued <b>'+num(i.qty)+'</b> unit(s) of '+esc(i.mat)+'.','ok');
-    });
+  toast('This issue note was already posted to PostgreSQL and the stock deducted when it was created \u2014 no separate confirmation step exists in the backend.','in');
 }
 
 /* ---------- stock return ---------- */
@@ -4775,35 +5074,50 @@ function rtFromIssue(){
   if(!i) return;
   setVal('rtMat', i.mat); setVal('rtStore', i.store); setVal('rtDept', i.dept); setVal('rtQty', i.qty);
 }
-function saveReturn(){
+async function saveReturn(){
   if(!requireOk('rtForm')) return;
   var cond = val('rtCond');
+  var storeObj = byId(DB.stores,'store_name', val('rtStore'));
+  var matObj = byId(DB.materials,'code', val('rtMat'));
+  if(!storeObj || !matObj){ toast('Could not resolve store or material against the master data.','er'); return; }
   var rec = {id:uid('RN'), no:val('rtNo'), issue:val('rtIssue')||'\u2014', date:val('rtDate'),
     mat:val('rtMat'), qty:nval('rtQty'), uom:muom(val('rtMat')), store:val('rtStore'),
     dept:val('rtDept'), condition:cond, reason:val('rtReason'),
     restock: cond==='Serviceable'? 'Pending restock':'Sent for inspection',
     status: cond==='Serviceable'? 'Under Inspection':'Under Inspection'};
-  DB.returns.unshift(rec);
-  logAudit('Stock Return', rec.no,'Created','Status','\u2014','Under Inspection',rec.reason);
-  closeModal(); save();
-  toast('Recorded return <b>'+esc(rec.no)+'</b>.','ok');
-  goto('inv/return');
+  var payload = {store_id: storeObj.id, item_id: matObj.id, return_qty: rec.qty, condition_status: cond};
+  try {
+    var res = await fetch(API_BASE+'/inventory/returns', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the return ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    rec.id = created.id; rec.no = created.return_no || rec.no;
+    DB.returns.unshift(rec);
+    logAudit('Stock Return', rec.no,'Created','Status','\u2014','Under Inspection',rec.reason);
+    closeModal(); save();
+    toast('Recorded return <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+').','ok');
+    goto('inv/return');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  }
 }
-function restockReturn(id){
+async function restockReturn(id){
   var r = byId(DB.returns,'id',id);
   confirmAct({title:'Restock returned material', ok:'Restock', btnClass:'ok', reason:true,
     message:'<b>'+num(r.qty)+'</b> unit(s) of '+esc(r.mat)+' are taken back into stock at '+esc(r.store)+'.'},
-    function(reason){
+    async function(reason){
+      try {
+        var res = await fetch(API_BASE+'/inventory/returns/'+r.id+'/restock', {method:'PUT'});
+        if(!res.ok){ var e = await res.text(); toast('Failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+      } catch(err) {
+        toast('Failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
+      }
       var s = DB.stock.filter(function(x){ return x.mat===r.mat && x.store===r.store; })[0];
       if(s) s.avail += r.qty;
       var m = byId(DB.materials,'code',r.mat); if(m) m.stock += r.qty;
       r.restock='Restocked'; r.status='Accepted';
-      DB.movements.unshift({id:uid('V'), no:'MOV/2026/'+pad(9600+DB.movements.length*3,6), date:TODAY,
-        mat:r.mat, type:'Return from User', src:r.dept, dst:r.store, qty:r.qty, uom:r.uom,
-        value:r.qty*mrate(r.mat), ref:r.no, by:'Store Officer', status:'Approved'});
       logAudit('Stock Return', r.no,'Restocked','Status','Under Inspection','Accepted',reason);
       tblReload('tRet', DB.returns);
-      commit('Restocked <b>'+num(r.qty)+'</b> unit(s).','ok');
+      commit('Restocked <b>'+num(r.qty)+'</b> unit(s) of '+esc(r.mat)+' into '+esc(r.store)+' in PostgreSQL.','ok');
     });
 }
 function condemnReturn(id){
@@ -4825,13 +5139,127 @@ function condemnReturn(id){
     });
 }
 
+/* ---------- tool issuance (daily check-out / check-in) ---------- */
+SCREENS['inv/tools'] = function(){
+  return pageHead('Tool Issuance','Inventory Integration',
+    'Daily check-out of returnable tools and equipment to workers, with check-in tracking',
+    '<button class="btn gh sm" onclick="tblExport(\'tTool\',\'Tool_Issuance_Register\')">⤓ Export</button>'+
+    '<button class="btn pri sm" onclick="toolCheckoutEntry()">+ Check out tool</button>',
+    reqTags('MMP_12'))+
+  summaryRow([
+    {l:'Vouchers', v:DB.toolIssuances.length, c:'#1E5A96'},
+    {l:'With workers', v:DB.toolIssuances.filter(function(t){ return t.status==='Issued'; }).length, c:'#B45309'},
+    {l:'Returned', v:DB.toolIssuances.filter(function(t){ return t.status==='Returned'; }).length, c:'#15803D'},
+    {l:'Overdue', v:DB.toolIssuances.filter(function(t){ return t.status==='Issued' && t.expected < TODAY; }).length, c:'#B91C1C'}
+  ])+
+  '<div class="card"><div class="bd">'+renderTable({id:'tTool', rows:DB.toolIssuances, cols:[
+    {h:'Voucher No.', k:'no', cls:'mono'},
+    {h:'Date', k:'date', f:function(r){ return fdate(r.date); }},
+    {h:'Tool', k:'mat', cls:'mono'},
+    {h:'Tool Name', k:'n', f:function(r){ return esc(mname(r.mat)); }},
+    {h:'Serial No.', k:'serial', cls:'mono'},
+    {h:'Store', k:'store'},
+    {h:'Worker / Labour', k:'worker'},
+    {h:'ID Card', k:'idCard', cls:'mono'},
+    {h:'Shift', k:'shift'},
+    {h:'Expected Return', k:'expected', f:function(r){
+      var overdue = r.status==='Issued' && r.expected < TODAY;
+      return (overdue? '<span class="fw6" style="color:#B91C1C">':'')+fdate(r.expected)+(overdue? ' (Overdue)</span>':''); }},
+    {h:'Returned On', k:'returnedDate', f:function(r){ return r.returnedDate? fdate(r.returnedDate):'—'; }},
+    {h:'Condition', k:'condition'},
+    {h:'Status', k:'status', f:function(r){ return badge(r.status); }},
+    {h:'Actions', k:'a', cls:'acts', srt:false, f:function(r){
+      return r.status==='Issued'
+        ? actIcon('Check in','toolCheckinEntry(\''+r.id+'\')','ok')
+        : '<span class="muted">—</span>'; }}
+  ], empty:'No tool voucher recorded'})+'</div></div>';
+};
+function toolCheckoutEntry(){
+  var tools = DB.materials.filter(function(m){ return m.isTool || m.cat==='Tools & Equipment'; });
+  modal({title:'Check out tool to worker', size:'md',
+    body:'<div id="tlForm"><div class="fgrid g2">'+
+      fld({id:'tlNo', label:'Voucher number', val:'TOOL/2026/'+pad(100+DB.toolIssuances.length,5), ro:true})+
+      fld({id:'tlDate', label:'Issue date', type:'date', val:TODAY, req:true, date:true})+
+      fld({id:'tlMat', label:'Tool', type:'select', req:true,
+           opts:(tools.length?tools:DB.materials).map(function(m){ return {v:m.code, l:m.code+' — '+m.name}; })})+
+      fld({id:'tlSerial', label:'Tool serial / asset tag', ph:'e.g. TOOL-SN-4102'})+
+      fld({id:'tlQty', label:'Quantity', type:'number', val:1, num:true, req:true, min:1})+
+      fld({id:'tlStore', label:'Issuing store', type:'select', opts:STORES, req:true})+
+      fld({id:'tlWorker', label:'Worker / labour name', req:true})+
+      fld({id:'tlIdCard', label:'Worker ID card no.'})+
+      fld({id:'tlShift', label:'Shift', type:'select', blank:false,
+           opts:['Morning Shift','Evening Shift','Night Shift']})+
+      fld({id:'tlExpected', label:'Expected return date', type:'date', val:TODAY, req:true, date:true})+
+      '</div></div>',
+    footer:'<button class="btn" data-close>Cancel</button>'+
+      '<button class="btn pri" onclick="saveToolCheckout()">Check out</button>'});
+}
+async function saveToolCheckout(){
+  if(!requireOk('tlForm')) return;
+  var matObj = byId(DB.materials,'code', val('tlMat'));
+  var storeObj = byId(DB.stores,'store_name', val('tlStore'));
+  if(!matObj || !storeObj){ toast('Could not resolve tool or store against the master data.','er'); return; }
+  var payload = {item_id: matObj.id, store_id: storeObj.id, tool_serial_code: val('tlSerial')||undefined,
+    issued_qty: nval('tlQty')||1, worker_labor_name: val('tlWorker'), worker_id_card: val('tlIdCard')||undefined,
+    shift_name: val('tlShift'), expected_return: val('tlExpected')};
+  try {
+    var res = await fetch(API_BASE+'/inventory/tool-issuances/checkout', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the checkout ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    var rec = {id:created.id, no:created.voucher_no || val('tlNo'), date:val('tlDate'),
+      mat:matObj.code, serial:val('tlSerial')||('TOOL-SN-'+created.id), qty:nval('tlQty')||1,
+      store:val('tlStore'), worker:val('tlWorker'), idCard:val('tlIdCard')||'—', shift:val('tlShift'),
+      expected:val('tlExpected'), returnedQty:0, returnedDate:'', condition:'Working', fine:0,
+      status:'Issued', remarks:''};
+    DB.toolIssuances.unshift(rec);
+    logAudit('Tool Issuance', rec.no,'Checked Out','Worker','—',rec.worker,'Daily tool check-out');
+    closeModal(); save();
+    toast('Checked out tool <b>'+esc(rec.no)+'</b> to '+esc(rec.worker)+' in PostgreSQL (id '+created.id+').','ok');
+    goto('inv/tools');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  }
+}
+function toolCheckinEntry(id){
+  var t = byId(DB.toolIssuances,'id',id);
+  modal({title:'Check in tool — '+esc(t.no), size:'md',
+    body:'<table class="kv" style="margin-bottom:11px">'+
+      kvRow('Tool', esc(mname(t.mat))+' <span class="muted">('+esc(t.mat)+')</span>')+
+      kvRow('Issued to', esc(t.worker)+' — '+esc(t.idCard))+
+      kvRow('Expected return', fdate(t.expected))+'</table>'+
+    '<div id="tiForm"><div class="fgrid g2">'+
+      fld({id:'tiCond', label:'Condition on return', type:'select', blank:false,
+           opts:['Good / Inspected','Minor Damage','Major Damage / Unserviceable']})+
+      fld({id:'tiFine', label:'Fine / damage amount (₹)', type:'number', val:0, num:true, min:0})+
+      '</div><div class="fgrid" style="margin-top:11px">'+
+      fld({id:'tiRemarks', label:'Remarks', type:'textarea', rows:2})+'</div></div>',
+    footer:'<button class="btn" data-close>Cancel</button>'+
+      '<button class="btn pri" onclick="saveToolCheckin(\''+id+'\')">Check in</button>'});
+}
+async function saveToolCheckin(id){
+  var t = byId(DB.toolIssuances,'id',id);
+  var payload = {tool_condition: val('tiCond'), remarks: val('tiRemarks')||undefined};
+  try {
+    var res = await fetch(API_BASE+'/inventory/tool-issuances/'+t.id+'/checkin', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the check-in ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
+  }
+  t.returnedQty = t.qty; t.returnedDate = TODAY; t.condition = val('tiCond'); t.fine = nval('tiFine')||0;
+  t.status = 'Returned';
+  logAudit('Tool Issuance', t.no,'Checked In','Condition','Working', t.condition, val('tiRemarks'));
+  closeModal(); save();
+  tblReload('tTool', DB.toolIssuances);
+  commit('Checked in tool <b>'+esc(t.no)+'</b> from '+esc(t.worker)+' in PostgreSQL.','ok');
+}
+
 /* ---------- reorder planning ---------- */
 SCREENS['inv/reorder'] = function(){
   var rows = DB.stock.filter(function(s){ return s.avail < mreorder(s.mat); })
     .map(function(s,i){
       var ro = mreorder(s.mat), m = byId(DB.materials,'code',s.mat) || {reorderQty:ro*2, leadTime:21};
       var openPo = sum(DB.workorders.filter(function(w){
-        return w.lines[0].mat===s.mat && ['Issued','Approved','Delayed'].indexOf(w.status)>=0; }),
+        return w.lines && w.lines[0] && w.lines[0].mat===s.mat && ['Issued','Approved','Delayed'].indexOf(w.status)>=0; }),
         function(w){ return w.lines[0].qty - w.delivered; });
       return {id:'RO'+i, mat:s.mat, store:s.store, avail:s.avail, reorder:ro,
         shortfall: Math.max(0, ro - s.avail), openPo:openPo,
@@ -4874,10 +5302,26 @@ function reorderToRequisition(){
   var value = sum(sel, function(r){ return r.suggest*r.rate; });
   confirmAct({title:'Raise replenishment requisition', ok:'Raise requisition', btnClass:'pri', reason:true,
     message:'A single requisition is raised covering '+sel.length+' material line(s) worth <b>'+inr(value)+'</b>.'},
-    function(reason){
-      var no = seq('MR/DIT/2026/', DB.requisitions,'no',6);
+    async function(reason){
+      var storeObj = byId(DB.stores,'store_name', STORES[0]);
+      var payloadLines = [];
+      for(var i=0;i<sel.length;i++){
+        var r = sel[i];
+        var matObj = byId(DB.materials,'code', r.mat);
+        if(!matObj){ toast('Could not resolve material "'+esc(r.mat)+'" against the master data.','er'); return; }
+        payloadLines.push({item_id: matObj.id, requested_qty: r.suggest, est_unit_rate: r.rate, preferred_make:'', technical_spec: matObj.spec||''});
+      }
+      var payload = {req_date: TODAY, store_id: storeObj.id, priority:'Urgent',
+        purpose:'Replenishment against reorder level. '+reason, lines: payloadLines};
+      var created;
+      try {
+        var res = await fetch(API_BASE+'/requisitions/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+        if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the requisition ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+        created = await res.json();
+      } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
+      var no = created.req_no || seq('MR/DIT/2026/', DB.requisitions,'no',6);
       DB.requisitions.unshift({
-        id:uid('R'), no:no, date:TODAY, dept:DEPTS[0], office:'Head Office', section:'Store Section',
+        id:created.id, no:no, date:TODAY, dept:DEPTS[0], office:'Head Office', section:'Store Section',
         requestor:'Anil Katwale',
         lines: sel.map(function(r){
           return {mat:r.mat, desc:mname(r.mat), qty:r.suggest, uom:muom(r.mat), rate:r.rate,
@@ -4892,7 +5336,7 @@ function reorderToRequisition(){
       logAudit('Requisition', no,'Submitted','Status','\u2014','Submitted','Replenishment against reorder level');
       notify('wa','Replenishment requisition '+no,'Raised for '+sel.length+' material(s) below reorder level','req/approvals');
       save(); refreshNavCounts();
-      toast('Raised replenishment requisition <b>'+esc(no)+'</b>.','ok');
+      toast('Raised replenishment requisition <b>'+esc(no)+'</b> in PostgreSQL (id '+created.id+').','ok');
       goto('req/list');
     });
 }
@@ -4929,7 +5373,7 @@ SCREENS['billing/invoice'] = function(){
   ])+
   filterBar([
     fld({id:'fiNo', label:'Invoice number', ph:'INV/'}),
-    fld({id:'fiVendor', label:'Vendor', type:'select', opts:VENDORS.map(function(v){ return {v:v.code,l:v.name}; }), blank:'All'}),
+    fld({id:'fiVendor', label:'Vendor', type:'select', opts:DB.vendors.map(function(v){ return {v:v.party_code,l:v.party_name}; }), blank:'All'}),
     fld({id:'fiStatus', label:'Match status', type:'select', opts:['Matched','Exception','Pending','Rejected'], blank:'All'}),
     fld({id:'fiPay', label:'Payment status', type:'select', opts:['Pending','Paid'], blank:'All'})
   ], 'applyInvFilter()',
@@ -5017,23 +5461,34 @@ function ivCalc(){
     '</div><div class="note '+(net>0?'ok':'er')+'">Net payable to the vendor: <b>'+inr(net)+'</b>'+
     (ld>0? ' after liquidated damages of '+inr(ld)+' for delayed delivery':'')+'.</div>';
 }
-function saveInvoice(){
+async function saveInvoice(){
   if(!requireOk('ivForm')) return;
   var g = byId(DB.grns,'no',val('ivGrn'));
+  if(!g){ toast('Select a valid GRN before saving.','er'); return; }
   var amt = nval('ivAmount');
   if(amt<=0){ toast('Invoice amount must be greater than zero.','er'); return; }
+  var woObj = byId(DB.workorders,'no', g.wo);
+  if(!woObj){ toast('Could not resolve the linked work order against the master data.','er'); return; }
   var rec = {id:uid('N'), no:val('ivNo'), vinv:val('ivVinv'), date:val('ivDate'), recd:val('ivRecd'),
     vendor:g.vendor, wo:g.wo, grn:g.no, amount:amt, matched:0, exception:0,
     ld:nval('ivLd'), retention:Math.round(amt*nval('ivRet')/100),
     tds:Math.round(amt*nval('ivTds')/100), gstTds:Math.round(amt*nval('ivGst')/100),
     status:'Pending', finance:'Under Review', payment:'Pending', billNo:'', utr:'',
     remarks:'', attachments:attList('ivAtt')};
-  DB.invoices.unshift(rec);
-  logAudit('Invoice', rec.no,'Recorded','Status','\u2014','Pending','Vendor invoice '+rec.vinv+' received');
-  closeModal(); save(); refreshNavCounts();
-  toast('Recorded invoice <b>'+esc(rec.no)+'</b>. Running the three-way match.','ok');
-  goto('billing/invoice');
-  setTimeout(function(){ runMatch(rec.id); }, 400);
+  var payload = {vendor_inv_no: rec.vinv, vendor_inv_date: rec.date, wo_id: woObj.id, grn_id: g.id, basic_amount: amt, tax_amount: 0};
+  try {
+    var res = await fetch(API_BASE+'/billing/invoices', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the invoice ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    rec.id = created.id; rec.no = created.inv_no || rec.no; rec.status = 'Matched';
+    DB.invoices.unshift(rec);
+    logAudit('Invoice', rec.no,'Recorded','Status','\u2014','Pending','Vendor invoice '+rec.vinv+' received');
+    closeModal(); save(); refreshNavCounts();
+    toast('Recorded invoice <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+'). Three-way match run by the backend.','ok');
+    goto('billing/invoice');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  }
 }
 function viewInvoice(id){
   var i = byId(DB.invoices,'id',id);
@@ -5204,15 +5659,24 @@ function sendToFinance(id){
     message:'A bill is generated and passed to the IFMS expenditure module for payment processing.',
     detail: kvRow('Invoice', esc(i.no))+kvRow('Vendor', esc(vname(i.vendor)))+
             kvRow('Net payable', inr(i.amount - i.retention - i.tds - i.gstTds - i.ld))},
-    function(reason){
-      i.finance = 'Approved';
-      i.billNo = 'BILL/2026/'+pad(920+DB.invoices.length,4);
-      logAudit('Invoice', i.no,'Sent to Finance','Finance Status','Under Review','Approved',reason);
-      notify('in','Bill '+i.billNo+' sent to finance','For '+vname(i.vendor)+' against '+i.wo,'billing/payment');
-      closeAllModals(); save();
-      ['tInv','tMtch','tBill'].forEach(function(t){ if(TBL[t]) tblReload(t, DB.invoices); });
-      refreshNavCounts();
-      commit('Bill <b>'+esc(i.billNo)+'</b> generated and sent to finance.','ok');
+    async function(reason){
+      try {
+        var sanRes = await fetch(API_BASE+'/billing/invoices/'+i.id+'/generate-sanction', {method:'POST'});
+        if(!sanRes.ok){ var e1 = await sanRes.text(); toast('Send failed: sanction generation rejected ('+sanRes.status+'). '+esc(e1.slice(0,150)),'er'); return; }
+        var sanData = await sanRes.json();
+        var treRes = await fetch(API_BASE+'/billing/invoices/'+i.id+'/send-to-treasury', {method:'POST'});
+        if(!treRes.ok){ var e2 = await treRes.text(); toast('Send failed: treasury submission rejected ('+treRes.status+'). '+esc(e2.slice(0,150)),'er'); return; }
+        i.finance = 'Approved';
+        i.billNo = sanData.sanction_no || ('BILL/2026/'+pad(920+DB.invoices.length,4));
+        logAudit('Invoice', i.no,'Sent to Finance','Finance Status','Under Review','Approved',reason);
+        notify('in','Bill '+i.billNo+' sent to finance','For '+vname(i.vendor)+' against '+i.wo,'billing/payment');
+        closeAllModals(); save();
+        ['tInv','tMtch','tBill'].forEach(function(t){ if(TBL[t]) tblReload(t, DB.invoices); });
+        refreshNavCounts();
+        commit('Bill <b>'+esc(i.billNo)+'</b> generated and sent to finance in PostgreSQL.','ok');
+      } catch(err) {
+        toast('Send failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+      }
     });
 }
 
@@ -5255,15 +5719,25 @@ function bulkSendFinance(){
   var net = sum(sel, function(i){ return i.amount-i.retention-i.tds-i.gstTds-i.ld; });
   confirmAct({title:'Send '+sel.length+' bill(s) to finance', ok:'Send to finance', btnClass:'ok', reason:true,
     message:'Bills worth a net <b>'+inr(net)+'</b> are passed to the expenditure module.'},
-    function(reason){
-      sel.forEach(function(i,k){
-        i.finance='Approved';
-        i.billNo = 'BILL/2026/'+pad(930+DB.invoices.length+k,4);
-        logAudit('Invoice', i.no,'Sent to Finance','Finance Status','Under Review','Approved',reason);
-      });
+    async function(reason){
+      var n=0, failed=0;
+      for(var k=0;k<sel.length;k++){
+        var i = sel[k];
+        try {
+          var sanRes = await fetch(API_BASE+'/billing/invoices/'+i.id+'/generate-sanction', {method:'POST'});
+          if(!sanRes.ok) throw new Error('sanction rejected ('+sanRes.status+')');
+          var sanData = await sanRes.json();
+          var treRes = await fetch(API_BASE+'/billing/invoices/'+i.id+'/send-to-treasury', {method:'POST'});
+          if(!treRes.ok) throw new Error('treasury submission rejected ('+treRes.status+')');
+          i.finance='Approved';
+          i.billNo = sanData.sanction_no || ('BILL/2026/'+pad(930+DB.invoices.length+k,4));
+          logAudit('Invoice', i.no,'Sent to Finance','Finance Status','Under Review','Approved',reason);
+          n++;
+        } catch(err) { failed++; }
+      }
       tblReload('tBill', DB.invoices.filter(function(i){ return i.status==='Matched'; }));
       refreshNavCounts();
-      commit('Sent '+sel.length+' bill(s) to finance.','ok');
+      commit('Sent '+n+' bill(s) to finance in PostgreSQL'+(failed? '; '+failed+' failed':'')+'.', failed?'wa':'ok');
     });
 }
 
@@ -5307,13 +5781,20 @@ function recordPayment(id){
   var net = i.amount-i.retention-i.tds-i.gstTds-i.ld;
   confirmAct({title:'Record payment', ok:'Record payment', btnClass:'ok', reason:true,
     message:'Payment of <b>'+inr(net)+'</b> to '+esc(vname(i.vendor))+' is recorded against bill '+esc(i.billNo)+'.'},
-    function(reason){
-      i.payment='Paid';
-      i.utr = 'UTR'+pad(560000+DB.invoices.length*37,9);
-      logAudit('Invoice', i.no,'Paid','Payment Status','Pending','Paid',reason+' \u2014 UTR '+i.utr);
-      tblReload('tPay', DB.invoices.filter(function(x){ return !!x.billNo; }));
-      refreshNavCounts();
-      commit('Payment recorded. UTR <b>'+esc(i.utr)+'</b>.','ok');
+    async function(reason){
+      try {
+        var res = await fetch(API_BASE+'/billing/invoices/'+i.id+'/payment-update', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
+        if(!res.ok){ var e = await res.text(); toast('Payment failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+        var created = await res.json();
+        i.payment='Paid';
+        i.utr = created.utr_number || ('UTR'+pad(560000+DB.invoices.length*37,9));
+        logAudit('Invoice', i.no,'Paid','Payment Status','Pending','Paid',reason+' \u2014 UTR '+i.utr);
+        tblReload('tPay', DB.invoices.filter(function(x){ return !!x.billNo; }));
+        refreshNavCounts();
+        commit('Payment recorded in PostgreSQL. UTR <b>'+esc(i.utr)+'</b>.','ok');
+      } catch(err) {
+        toast('Payment failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+      }
     });
 }
 
@@ -5337,7 +5818,7 @@ SCREENS['warranty/list'] = function(){
   ])+
   filterBar([
     fld({id:'fwtMat', label:'Material code', ph:'MAT-'}),
-    fld({id:'fwtVendor', label:'Vendor', type:'select', opts:VENDORS.map(function(v){ return {v:v.code,l:v.name}; }), blank:'All'}),
+    fld({id:'fwtVendor', label:'Vendor', type:'select', opts:DB.vendors.map(function(v){ return {v:v.party_code,l:v.party_name}; }), blank:'All'}),
     fld({id:'fwtState', label:'Warranty status', type:'select', opts:['Active','Expiring Soon','Expired'], blank:'All'})
   ], 'applyWarrFilter()',
     '<button class="btn sm" onclick="resetWarrFilter()">\u21BA Reset</button>')+
@@ -5421,7 +5902,7 @@ SCREENS['warranty/defects'] = function(){
   ])+
   filterBar([
     fld({id:'fdNo', label:'Complaint number', ph:'DEF/'}),
-    fld({id:'fdVendor', label:'Vendor', type:'select', opts:VENDORS.map(function(v){ return {v:v.code,l:v.name}; }), blank:'All'}),
+    fld({id:'fdVendor', label:'Vendor', type:'select', opts:DB.vendors.map(function(v){ return {v:v.party_code,l:v.party_name}; }), blank:'All'}),
     fld({id:'fdSev', label:'Severity', type:'select', opts:['Critical','High','Medium','Low'], blank:'All'}),
     fld({id:'fdStatus', label:'Status', type:'select', blank:'All',
          opts:['Open','Vendor Notified','Assigned','Under Repair','Replacement Pending','Escalated','Resolved','Out of Warranty']})
@@ -5477,7 +5958,7 @@ function raiseDefect(warrantyId){
       fld({id:'dfSerial', label:'Serial number', val: w? w.serial:'', ph:'SN'})+
       fld({id:'dfAsset', label:'Asset tag', val: w? w.asset:'', ph:'AST/'})+
       fld({id:'dfVendor', label:'Vendor', type:'select', req:true, val: w? w.vendor:'',
-           opts:VENDORS.map(function(v){ return {v:v.code, l:v.name}; })})+
+           opts:DB.vendors.map(function(v){ return {v:v.party_code, l:v.party_name}; })})+
       fld({id:'dfDept', label:'Reporting department', type:'select', opts:DEPTS, req:true})+
       fld({id:'dfLoc', label:'Location', val:'Room 204'})+
       fld({id:'dfCat', label:'Defect category', type:'select', req:true, blank:false,
@@ -5504,22 +5985,34 @@ function dfSla(){
   out.innerHTML = '<div class="note in">Severity <b>'+esc(sev)+'</b> carries an SLA of <b>'+days+
     ' day(s)</b>. The complaint escalates automatically if the vendor does not respond by '+fdate(val('dfDue'))+'.</div>';
 }
-function saveDefect(){
+async function saveDefect(){
   if(!requireOk('dfForm')) return;
+  var matObj = byId(DB.materials,'code', val('dfMat'));
+  var vendorObj = byId(DB.vendors,'party_code', val('dfVendor'));
+  if(!matObj || !vendorObj){ toast('Could not resolve material or vendor against the master data.','er'); return; }
   var rec = {id:uid('DF'), no:val('dfNo'), date:val('dfDate'), mat:val('dfMat'),
     serial:val('dfSerial'), asset:val('dfAsset'), vendor:val('dfVendor'), dept:val('dfDept'),
     wo:'\u2014', grn:'\u2014', location:val('dfLoc'), cat:val('dfCat'), severity:val('dfSev'),
     warranty:val('dfWarr'), desc:val('dfDesc'), vendorResp:'Awaiting', due:val('dfDue'),
     resolved:'', status: val('dfWarr')==='Expired'? 'Out of Warranty':'Vendor Notified',
     officer:'Anil Katwale', escalation:'\u2014', attachments:attList('dfAtt')};
-  DB.defects.unshift(rec);
-  var w = DB.warranty.filter(function(x){ return x.serial===rec.serial; })[0];
-  if(w) w.complaints = (w.complaints||0)+1;
-  logAudit('Defect Complaint', rec.no,'Raised','Status','\u2014',rec.status, rec.desc.slice(0,80));
-  notify('er','Defect complaint '+rec.no+' raised', rec.severity+' severity with '+vname(rec.vendor),'warranty/defects');
-  closeModal(); save(); refreshNavCounts();
-  toast('Lodged complaint <b>'+esc(rec.no)+'</b> with '+esc(vname(rec.vendor))+'.','ok');
-  goto('warranty/defects');
+  var payload = {item_id: matObj.id, party_id: vendorObj.id, defect_desc: rec.desc, defect_category: rec.cat, severity: rec.severity};
+  try {
+    var res = await fetch(API_BASE+'/warranty/defects', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the complaint ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    rec.id = created.id; rec.no = created.ticket_no || rec.no;
+    DB.defects.unshift(rec);
+    var w = DB.warranty.filter(function(x){ return x.serial===rec.serial; })[0];
+    if(w) w.complaints = (w.complaints||0)+1;
+    logAudit('Defect Complaint', rec.no,'Raised','Status','\u2014',rec.status, rec.desc.slice(0,80));
+    notify('er','Defect complaint '+rec.no+' raised', rec.severity+' severity with '+vname(rec.vendor),'warranty/defects');
+    closeModal(); save(); refreshNavCounts();
+    toast('Lodged complaint <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+') with '+esc(vname(rec.vendor))+'.','ok');
+    goto('warranty/defects');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  }
 }
 function viewDefect(id){
   var d = byId(DB.defects,'id',id);
@@ -5586,13 +6079,19 @@ function escalateDefect(id){
     detail: kvRow('Complaint', esc(d.no))+kvRow('Vendor', esc(vname(d.vendor)))+
             kvRow('Days beyond SLA', Math.max(0, daysBetween(d.due,TODAY)))+
             kvRow('Current escalation', esc(d.escalation))},
-    function(reason){
+    async function(reason){
+      try {
+        var res = await fetch(API_BASE+'/warranty/defects/'+d.id+'/escalate', {method:'PUT'});
+        if(!res.ok){ var e = await res.text(); toast('Escalate failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+      } catch(err) {
+        toast('Escalate failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
+      }
       var old = d.status;
       d.status='Escalated'; d.escalation = lvl;
       logAudit('Defect Complaint', d.no,'Escalated','Status', old,'Escalated', lvl+' \u2014 '+reason);
       notify('er','Complaint '+d.no+' escalated', lvl,'warranty/escalation');
       closeAllModals(); save(); tblReload('tDef', DB.defects);
-      commit('Escalated <b>'+esc(d.no)+'</b> to '+esc(lvl)+'.','wa');
+      commit('Escalated <b>'+esc(d.no)+'</b> to '+esc(lvl)+' in PostgreSQL.','wa');
     });
 }
 function resolveDefect(id){
@@ -5601,12 +6100,18 @@ function resolveDefect(id){
     message:'The defect is recorded as resolved and the complaint closed.',
     detail: kvRow('Complaint', esc(d.no))+kvRow('Material', esc(d.mat))+
             kvRow('Turnaround', daysBetween(d.date,TODAY)+' days')},
-    function(reason){
+    async function(reason){
+      try {
+        var res = await fetch(API_BASE+'/warranty/defects/'+d.id+'/resolve', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({vendor_response: reason})});
+        if(!res.ok){ var e = await res.text(); toast('Resolve failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+      } catch(err) {
+        toast('Resolve failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
+      }
       var old = d.status;
       d.status='Resolved'; d.resolved=TODAY; d.vendorResp='Closed';
       logAudit('Defect Complaint', d.no,'Resolved','Status', old,'Resolved',reason);
       closeAllModals(); save(); tblReload('tDef', DB.defects); refreshNavCounts();
-      commit('Complaint <b>'+esc(d.no)+'</b> resolved.','ok');
+      commit('Complaint <b>'+esc(d.no)+'</b> resolved in PostgreSQL.','ok');
     });
 }
 
@@ -5819,20 +6324,32 @@ function dpCalc(){
     '</b>. Available stock of this material: <b>'+num(s? s.avail:0)+'</b>.'+
     (s && s.avail < q ? ' The proposed quantity exceeds the available balance.':'')+'</div>';
 }
-function saveDisposal(){
+async function saveDisposal(){
   if(!requireOk('dpForm')) return;
+  var storeObj = byId(DB.stores,'store_name', val('dpStore'));
+  var matObj = byId(DB.materials,'code', val('dpMat'));
+  if(!storeObj || !matObj){ toast('Could not resolve store or material against the master data.','er'); return; }
   var rec = {id:uid('DS'), no:val('dpNo'), mat:val('dpMat'), store:val('dpStore'),
     location:'Bin-Z-01', batch:val('dpBatch'), qty:nval('dpQty'),
     original:nval('dpOriginal'), book:nval('dpBook'), residual:nval('dpResidual'),
     reason:val('dpReason'), method:val('dpMethod'), approval:'Pending', status:'Under Review',
     committee:val('dpCommittee'), buyer:'', auction:'', date:val('dpDate'), value:0,
     remittance:'', attachments:attList('dpAtt')};
-  DB.disposals.unshift(rec);
-  logAudit('Disposal', rec.no,'Proposed','Approval Status','\u2014','Pending',val('dpJust'));
-  notify('wa','Disposal proposal '+rec.no,'Awaiting condemnation board approval','disp/proposal');
-  closeModal(); save(); refreshNavCounts();
-  toast('Submitted proposal <b>'+esc(rec.no)+'</b> for condemnation approval.','ok');
-  goto('disp/proposal');
+  var payload = {store_id: storeObj.id, item_id: matObj.id, disposal_qty: rec.qty, condemnation_reason: rec.reason, reserve_price: rec.residual, disposal_mode: rec.method};
+  try {
+    var res = await fetch(API_BASE+'/disposal/proposals', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the proposal ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    rec.id = created.id; rec.no = created.disp_proposal_no || rec.no;
+    DB.disposals.unshift(rec);
+    logAudit('Disposal', rec.no,'Proposed','Approval Status','\u2014','Pending',val('dpJust'));
+    notify('wa','Disposal proposal '+rec.no,'Awaiting condemnation board approval','disp/proposal');
+    closeModal(); save(); refreshNavCounts();
+    toast('Submitted proposal <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+') for condemnation approval.','ok');
+    goto('disp/proposal');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  }
 }
 function viewDisposal(id){
   var d = byId(DB.disposals,'id',id);
@@ -5858,31 +6375,37 @@ function viewDisposal(id){
         '<button class="btn ok" onclick="approveDisposal(\''+d.id+'\')">Approve</button>'
       : '<button class="btn" data-close>Close</button>'});
 }
-function approveDisposal(id){
+async function approveDisposal(id){
   var d = byId(DB.disposals,'id',id);
   confirmAct({title:'Approve disposal proposal', ok:'Approve', btnClass:'ok', reason:true,
     message:'The condemnation board approves disposal of <b>'+num(d.qty)+'</b> unit(s) of '+esc(d.mat)+
       ' by '+esc(d.method.toLowerCase())+'.',
     detail: kvRow('Book value', inr(d.book))+kvRow('Residual value', inr(d.residual))+
             kvRow('Committee', esc(d.committee))},
-    function(reason){
+    async function(reason){
+      var created;
+      try {
+        var res = await fetch(API_BASE+'/disposal/proposals/'+d.id+'/approve', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
+        if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the approval ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+        created = await res.json();
+      } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
       d.approval='Approved';
       d.status = d.method.indexOf('Auction')>=0 ? 'Auction Scheduled' : 'Approved';
-      if(d.method.indexOf('Auction')>=0) d.auction = 'AUC/2026/'+pad(80+DB.disposals.length,4);
+      d.auction = created.auction_ref_no || d.auction;
       logAudit('Disposal', d.no,'Approved','Approval Status','Pending','Approved',reason);
       closeAllModals(); save(); tblReload('tDsp', DB.disposals); refreshNavCounts();
-      commit('Approved <b>'+esc(d.no)+'</b>.','ok');
+      commit('Approved <b>'+esc(d.no)+'</b> in PostgreSQL.','ok');
     });
 }
 function rejectDisposal(id){
   var d = byId(DB.disposals,'id',id);
   confirmAct({title:'Reject disposal proposal', kind:'er', btnClass:'dgr', ok:'Reject', reason:true,
-    message:'The proposal is rejected and the material stays on the books.'},
+    message:'The proposal is rejected and the material stays on the books. Note: the backend has no rejection status field for disposal proposals, so this is recorded locally and in the audit trail only — the proposal remains ‘Pending Approval’ in PostgreSQL.'},
     function(reason){
       d.approval='Rejected'; d.status='Rejected';
       logAudit('Disposal', d.no,'Rejected','Approval Status','Pending','Rejected',reason);
       closeAllModals(); save(); tblReload('tDsp', DB.disposals); refreshNavCounts();
-      commit('Rejected <b>'+esc(d.no)+'</b>.','er');
+      commit('Rejected <b>'+esc(d.no)+'</b> (local only — no backend rejection field exists for disposal proposals).','wa');
     });
 }
 function completeDisposal(id){
@@ -5898,9 +6421,14 @@ function completeDisposal(id){
     footer:'<button class="btn" data-close>Cancel</button>'+
       '<button class="btn pri" onclick="saveDisposalCompletion(\''+id+'\')">Record disposal</button>'});
 }
-function saveDisposalCompletion(id){
+async function saveDisposalCompletion(id){
   if(!requireOk('cdForm')) return;
   var d = byId(DB.disposals,'id',id);
+  var payload = {buyer_name: val('cdBuyer')||'Scrap Dealer', realized_value: nval('cdValue')||0, deposit_challan_no: val('cdChallan')};
+  try {
+    var res = await fetch(API_BASE+'/disposal/proposals/'+d.id+'/record-sale', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+  } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
   var s = DB.stock.filter(function(x){ return x.mat===d.mat && x.store===d.store; })[0];
   if(s) s.avail = Math.max(0, s.avail - d.qty);
   var m = byId(DB.materials,'code',d.mat); if(m) m.stock = Math.max(0, m.stock - d.qty);
@@ -5912,7 +6440,7 @@ function saveDisposalCompletion(id){
   logAudit('Disposal', d.no,'Disposal Recorded','Status','Approved',d.status, val('cdNote')+
     (d.value? ' \u2014 realised '+inr(d.value):''));
   closeModal(); save(); tblReload('tDsp', DB.disposals); refreshNavCounts();
-  toast('Recorded disposal of <b>'+num(d.qty)+'</b> unit(s). Stock updated.','ok');
+  toast('Recorded disposal of <b>'+num(d.qty)+'</b> unit(s) in PostgreSQL. Stock updated.','ok');
 }
 SCREENS['disp/condemn'] = function(){
   var rows = DB.disposals.filter(function(d){ return ['Unserviceable','Obsolete','End of Life','Damaged'].indexOf(d.reason)>=0; });
@@ -6081,15 +6609,26 @@ function auditEntry(){
     footer:'<button class="btn" data-close>Cancel</button>'+
       '<button class="btn pri" onclick="saveAudit()">Schedule verification</button>'});
 }
-function saveAudit(){
+async function saveAudit(){
   if(!requireOk('avForm')) return;
+  var storeObj = byId(DB.stores,'store_name', val('avStore'));
+  if(!storeObj){ toast('Select a valid store before scheduling.','er'); return; }
   var rec = {id:uid('A'), no:val('avNo'), type:val('avType'), dept:val('avDept'), store:val('avStore'),
     cat:val('avCat')||'All categories', period:val('avPeriod'), team:val('avTeam'),
     start:val('avStart'), end:val('avEnd'), status:'Scheduled'};
-  DB.audits.unshift(rec);
-  logAudit('Stock Audit', rec.no,'Scheduled','Status','\u2014','Scheduled',rec.type+' verification of '+rec.store);
-  closeModal(); save(); tblReload('tAud', DB.audits);
-  toast('Scheduled verification <b>'+esc(rec.no)+'</b>.','ok');
+  var payload = {store_id: storeObj.id, audit_type: rec.type, period_label: rec.period, audit_team_lead: rec.team};
+  try {
+    var res = await fetch(API_BASE+'/audit/schedules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the schedule ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+    var created = await res.json();
+    rec.id = created.id; rec.no = created.audit_no || rec.no;
+    DB.audits.unshift(rec);
+    logAudit('Stock Audit', rec.no,'Scheduled','Status','\u2014','Scheduled',rec.type+' verification of '+rec.store);
+    closeModal(); save(); tblReload('tAud', DB.audits);
+    toast('Scheduled verification <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+'). Lines pre-populated from current stock.','ok');
+  } catch(err) {
+    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  }
 }
 function closeAudit(id){
   var a = byId(DB.audits,'id',id);
@@ -6109,18 +6648,43 @@ function postVariances(){
   if(withoutReason.length){ toast(withoutReason.length+' selected line(s) have no reason recorded. Enter a reason first.','er'); return; }
   confirmAct({title:'Post variances for adjustment', ok:'Post '+sel.length+' variance(s)', btnClass:'sec', reason:true,
     message:'Adjustment entries are raised for the selected variances and sent for approval of the competent authority.'},
-    function(reason){
-      sel.forEach(function(v,k){
-        DB.adjustments.unshift({id:uid('AJ'), no:'ADJ/2026/'+pad(260+DB.adjustments.length+k,5),
-          mat:v.mat, store:v.store, book:v.book, phys:v.phys, variance:v.variance,
-          rate:v.rate, value:v.variance*v.rate, reason:v.reason,
-          doc:'PV Sheet '+v.audit, authority:'Head of Office', finance:'Pending', status:'Pending'});
-        v.status = 'Pending';
-        logAudit('Stock Adjustment', v.mat,'Variance Posted','Variance','0', String(v.variance), v.reason+' \u2014 '+reason);
-      });
-      save(); tblPaint('tPv');
-      toast('Posted '+sel.length+' variance(s) for adjustment approval.','ok');
-      goto('audit/adjust');
+    async function(reason){
+      try {
+        var byAudit = {};
+        sel.forEach(function(v){ (byAudit[v.auditId] = byAudit[v.auditId]||[]).push(v); });
+        for(var auditId in byAudit){
+          var counts = byAudit[auditId].map(function(v){ return {line_id: Number(v.id), physical_qty: v.phys, notes: v.reason}; });
+          var res = await fetch(API_BASE+'/audit/schedules/'+auditId+'/record-counts', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({counts: counts})});
+          if(!res.ok){ var e = await res.text(); toast('Post failed for audit '+auditId+': backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+        }
+        for(var k=0;k<sel.length;k++){
+          var v = sel[k];
+          var storeObj = byId(DB.stores,'store_name', v.store);
+          var matObj = byId(DB.materials,'code', v.mat);
+          if(!storeObj || !matObj) continue;
+          var adjRes = await fetch(API_BASE+'/audit/adjustments', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+            audit_id: v.auditId, store_id: storeObj.id, item_id: matObj.id,
+            adjustment_type: v.variance<0 ? 'Write-Off' : 'Write-In', adj_qty: Math.abs(v.variance)
+          })});
+          if(adjRes.ok){
+            var created = await adjRes.json();
+            DB.adjustments.unshift({id:created.id, no:created.adj_voucher_no,
+              mat:v.mat, store:v.store, book:v.book, phys:v.phys, variance:v.variance,
+              rate:v.rate, value:v.variance*v.rate, reason:v.reason,
+              doc:'PV Sheet '+v.audit, authority:'Head of Office', finance:'Pending', status:'Pending'});
+            var s = DB.stock.filter(function(x){ return x.mat===v.mat && x.store===v.store; })[0];
+            if(s) s.avail = Math.max(0, s.avail + v.variance);
+            var m = byId(DB.materials,'code',v.mat); if(m) m.stock = Math.max(0, m.stock + v.variance);
+          }
+          v.status = 'Pending';
+          logAudit('Stock Adjustment', v.mat,'Variance Posted','Variance','0', String(v.variance), v.reason+' \u2014 '+reason);
+        }
+        save(); tblPaint('tPv');
+        toast('Posted '+sel.length+' variance(s) for adjustment approval in PostgreSQL.','ok');
+        goto('audit/adjust');
+      } catch(err) {
+        toast('Post failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+      }
     });
 }
 
@@ -6206,9 +6770,6 @@ function approveAdjustment(id){
     detail: kvRow('Book balance', num(a.book))+kvRow('Physical balance', num(a.phys))+
             kvRow('Reason', esc(a.reason))+kvRow('Authority', esc(a.authority))},
     function(reason){
-      var s = DB.stock.filter(function(x){ return x.mat===a.mat && x.store===a.store; })[0];
-      if(s) s.avail = Math.max(0, s.avail + a.variance);
-      var m = byId(DB.materials,'code',a.mat); if(m) m.stock = Math.max(0, m.stock + a.variance);
       a.status='Approved'; a.finance='Posted';
       DB.movements.unshift({id:uid('V'), no:'MOV/2026/'+pad(9800+DB.movements.length*3,6), date:TODAY,
         mat:a.mat, type:'Physical Verification Adjustment', src: a.variance<0? a.store:'Adjustment',
@@ -6216,18 +6777,18 @@ function approveAdjustment(id){
         value:Math.abs(a.value), ref:a.no, by:'Anil Katwale', status:'Approved'});
       logAudit('Stock Adjustment', a.no,'Approved','Status','Pending','Approved',reason);
       save(); tblReload('tAdj', DB.adjustments);
-      commit('Adjustment <b>'+esc(a.no)+'</b> approved and posted to stock.','ok');
+      commit('Adjustment <b>'+esc(a.no)+'</b> marked approved (local only — the backend already posts the stock change when the variance is recorded and has no separate approval gate; stock in PostgreSQL was already updated).','wa');
     });
 }
 function rejectAdjustment(id){
   var a = byId(DB.adjustments,'id',id);
   confirmAct({title:'Reject adjustment', kind:'er', btnClass:'dgr', ok:'Reject', reason:true,
-    message:'The adjustment is rejected. The variance stays open and must be re-verified.'},
+    message:'The adjustment is marked rejected in the local register. Note: the backend already posted this stock change when the variance was recorded and has no reversal endpoint, so the stock movement in PostgreSQL is <b>not</b> undone by this action — reverse it with a correcting adjustment if required.'},
     function(reason){
       a.status='Rejected'; a.finance='Pending';
       logAudit('Stock Adjustment', a.no,'Rejected','Status','Pending','Rejected',reason);
       tblReload('tAdj', DB.adjustments);
-      commit('Rejected adjustment <b>'+esc(a.no)+'</b>.','er');
+      commit('Rejected adjustment <b>'+esc(a.no)+'</b> (local only — stock in PostgreSQL was not reversed).','er');
     });
 }
 
@@ -6374,10 +6935,26 @@ function forecastToRequisition(){
   var value = sum(sel, function(f){ return (f.override||f.suggest)*mrate(f.mat); });
   confirmAct({title:'Raise requisition from forecast', ok:'Raise requisition', btnClass:'pri', reason:true,
     message:'A requisition is raised covering '+sel.length+' material line(s) worth <b>'+inr(value)+'</b>, based on the demand forecast.'},
-    function(reason){
-      var no = seq('MR/DIT/2026/', DB.requisitions,'no',6);
+    async function(reason){
+      var storeObj = byId(DB.stores,'store_name', STORES[0]);
+      var payloadLines = [];
+      for(var i=0;i<sel.length;i++){
+        var f = sel[i];
+        var matObj = byId(DB.materials,'code', f.mat);
+        if(!matObj){ toast('Could not resolve material "'+esc(f.mat)+'" against the master data.','er'); return; }
+        payloadLines.push({item_id: matObj.id, requested_qty: (f.override||f.suggest), est_unit_rate: mrate(f.mat), preferred_make:'', technical_spec: matObj.spec||''});
+      }
+      var payload = {req_date: TODAY, store_id: storeObj.id, priority:'Normal',
+        purpose:'Forecast-based replenishment. '+reason, lines: payloadLines};
+      var created;
+      try {
+        var res = await fetch(API_BASE+'/requisitions/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+        if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the requisition ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
+        created = await res.json();
+      } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
+      var no = created.req_no || seq('MR/DIT/2026/', DB.requisitions,'no',6);
       DB.requisitions.unshift({
-        id:uid('R'), no:no, date:TODAY, dept:DEPTS[0], office:'Head Office', section:'Store Section',
+        id:created.id, no:no, date:TODAY, dept:DEPTS[0], office:'Head Office', section:'Store Section',
         requestor:'Anil Katwale',
         lines: sel.map(function(f){
           return {mat:f.mat, desc:mname(f.mat), qty:(f.override||f.suggest), uom:muom(f.mat),
@@ -6392,7 +6969,7 @@ function forecastToRequisition(){
       sel.forEach(function(f){ f.approval = 'Approved'; });
       logAudit('Requisition', no,'Submitted','Status','\u2014','Submitted','Raised from demand forecast');
       save(); refreshNavCounts();
-      toast('Raised requisition <b>'+esc(no)+'</b> from the forecast.','ok');
+      toast('Raised requisition <b>'+esc(no)+'</b> from the forecast in PostgreSQL (id '+created.id+').','ok');
       goto('req/list');
     });
 }
@@ -6865,7 +7442,7 @@ async function syncWithBackend(){
       const dList = await deptRes.json();
       if (dList && dList.length) {
         DEPTS.length = 0;
-        dList.forEach(function(d){ DEPTS.push(d.name || d.department_name); });
+        dList.forEach(function(d){ DEPTS.push(d.dept_name); });
         DB.departments = dList;
       }
     }
@@ -6881,7 +7458,7 @@ async function syncWithBackend(){
       const vList = await vendorRes.json();
       if (vList && vList.length) {
         VENDORS.length = 0;
-        vList.forEach(function(v){ VENDORS.push(v.party_name); });
+        vList.forEach(function(v){ VENDORS.push({code:v.party_code, name:v.party_name, gstin:v.gstin, cat:v.party_type, city:'Delhi', rating:v.party_rating||4.0}); });
         DB.vendors = vList;
       }
     }
@@ -6934,6 +7511,7 @@ async function syncWithBackend(){
             type: it.is_service ? 'Service' : 'Goods',
             stockType: it.is_stockable ? 'Stock' : 'Non-Stock',
             consumable: it.is_capital ? 'Non-Consumable' : 'Consumable',
+            isTool: !!it.is_returnable_tool,
             hazardous: false,
             perishable: false,
             rate: Number(it.estimated_rate || 0),
@@ -6987,16 +7565,16 @@ async function syncWithBackend(){
             project: PROJECTS[0],
             costCentre: COST_CENTRES[0],
             availBudget: 5000000,
-            value: Number(r.estimated_cost || 0),
-            lines: (r.items || []).map(function(l){
+            value: Number(r.total_est_amount || 0),
+            lines: (r.lines || []).map(function(l){
               return {
                 mat: l.item_code,
                 desc: l.item_name,
                 qty: Number(l.requested_qty || 1),
-                uom: l.uom || 'NOS',
-                rate: Number(l.estimated_rate || 0),
-                make: '',
-                spec: ''
+                uom: l.uom_code || 'NOS',
+                rate: Number(l.est_unit_rate || 0),
+                make: l.preferred_make || '',
+                spec: l.technical_spec || ''
               };
             }),
             budget: 'Available',
@@ -7016,7 +7594,7 @@ async function syncWithBackend(){
           return {
             id: w.id || ('W' + (i+1)),
             no: w.wo_no,
-            date: w.issue_date ? w.issue_date.slice(0,10) : TODAY,
+            date: w.wo_date ? w.wo_date.slice(0,10) : TODAY,
             tender: w.tender_no || 'TND/2026/10042',
             reqs: 'MR/DIT/2026/000101',
             vendor: w.vendor_name || VENDORS[0],
@@ -7026,17 +7604,17 @@ async function syncWithBackend(){
             terms: w.payment_terms || '100% on receipt and acceptance',
             deliveryDate: w.delivery_due_date ? w.delivery_due_date.slice(0,10) : addDays(TODAY, 45),
             status: w.status || 'Issued',
-            value: Number(w.total_value || 0),
-            tax: Math.round(Number(w.total_value || 0) * 0.18),
-            total: Math.round(Number(w.total_value || 0) * 1.18),
-            lines: (w.items || []).map(function(l){
+            value: Number(w.total_basic_amt || 0),
+            tax: Number(w.total_tax_amt || 0),
+            total: Number(w.total_wo_amount || 0),
+            lines: (w.lines || []).map(function(l){
               return {
                 mat: l.item_code,
                 desc: l.item_name,
-                qty: Number(l.ordered_qty || 1),
-                uom: l.uom || 'NOS',
+                qty: Number(l.order_qty || 1),
+                uom: l.uom_code || 'NOS',
                 rate: Number(l.unit_rate || 0),
-                taxPct: Number(l.tax_rate_pct || 18),
+                taxPct: Number(l.tax_percent || 18),
                 spec: ''
               };
             }),
@@ -7067,12 +7645,12 @@ async function syncWithBackend(){
             challanDate: g.challan_date ? g.challan_date.slice(0,10) : TODAY,
             vehicle: g.vehicle_number || 'DL 1L AA 4012',
             driver: g.driver_name || 'Driver',
-            lines: (g.items || []).map(function(l){
+            lines: (g.lines || []).map(function(l){
               return {
                 mat: l.item_code,
                 desc: l.item_name,
-                ordered: Number(l.received_qty || 1),
-                challanQty: Number(l.received_qty || 1),
+                ordered: Number(l.challan_qty || l.received_qty || 1),
+                challanQty: Number(l.challan_qty || l.received_qty || 1),
                 received: Number(l.received_qty || 1),
                 passed: Number(l.accepted_qty || l.received_qty || 1),
                 rejected: Number(l.rejected_qty || 0),
@@ -7081,7 +7659,15 @@ async function syncWithBackend(){
                 remarks: ''
               };
             }),
-            status: g.posting_status === 'Posted' ? 'Posted to Stock' : (g.insp_status || 'Under Inspection'),
+            mat: g.lines && g.lines[0] ? g.lines[0].item_code : undefined,
+            received: g.lines && g.lines[0] ? Number(g.lines[0].received_qty || 0) : 0,
+            accepted: g.lines && g.lines[0] ? Number(g.lines[0].accepted_qty || 0) : 0,
+            rejected: g.lines && g.lines[0] ? Number(g.lines[0].rejected_qty || 0) : 0,
+            damaged: 0, short: 0, excess: 0,
+            location: 'Receiving Bay A',
+            inspection: g.inspection_status || 'Pending',
+            posting: g.posting_status === 'Posted' ? 'Posted' : 'Pending',
+            status: g.posting_status === 'Posted' ? 'Posted to Stock' : (g.inspection_status || 'Under Inspection'),
             inspReport: 'INSP/2026/' + pad(100+i, 4),
             gateEntry: g.gate_entry_no || ('GE/2026/' + pad(200+i, 4)),
             attachments: []
@@ -7099,12 +7685,12 @@ async function syncWithBackend(){
             store: s.store_name,
             batch: 'BATCH-2026-01',
             expiry: '2028-03-31',
-            avail: Number(s.qty_on_hand || 0),
-            reserved: Number(s.qty_reserved || 0),
-            inTransit: Number(s.qty_in_transit || 0),
-            qcHold: Number(s.qty_qc_hold || 0),
-            rate: Number(s.unit_valuation_rate || 0),
-            value: Number(s.qty_on_hand || 0) * Number(s.unit_valuation_rate || 0)
+            avail: Number(s.available_qty || 0),
+            reserved: Number(s.allocated_qty || 0),
+            inTransit: 0,
+            qcHold: Number(s.quarantine_qty || 0),
+            rate: Number(s.avg_unit_cost || 0),
+            value: Number(s.total_stock_value || 0)
           };
         });
       }
@@ -7116,15 +7702,15 @@ async function syncWithBackend(){
         DB.movements = list.map(function(m, i){
           return {
             id: m.id || ('MOV' + (i+1)),
-            date: m.entry_date ? m.entry_date.slice(0,10) : TODAY,
-            type: m.movement_type || 'Receipt from Vendor',
+            date: m.txn_timestamp ? m.txn_timestamp.slice(0,10) : TODAY,
+            type: m.txn_type || 'Receipt from Vendor',
             mat: m.item_code,
             store: m.store_name || STORES[0],
-            qty: Number(m.qty || 0),
+            qty: Number(m.txn_qty || 0),
             rate: Number(m.unit_rate || 0),
-            val: Number(m.total_value || 0),
-            ref: m.reference_doc_no || 'GRN/2026/0001',
-            bal: Number(m.closing_balance || 0),
+            val: Number(m.txn_amount || 0),
+            ref: m.ref_doc_no || 'GRN/2026/0001',
+            bal: Number(m.closing_qty || 0),
             by: 'Anil Katwale',
             dst: DEPTS[0]
           };
@@ -7138,12 +7724,335 @@ async function syncWithBackend(){
         DB.notifications = list.map(function(n, i){
           return {
             id: n.id || ('N' + (i+1)),
-            kind: n.notif_type || 'in',
+            kind: n.event_type || 'in',
             title: n.title,
-            body: n.body,
+            body: n.message,
             route: n.action_route || 'req/list',
             time: n.created_at ? n.created_at.slice(0,10) : TODAY,
             read: n.is_read
+          };
+        });
+      }
+    }
+
+    if (audRes.ok) {
+      const list = await audRes.json();
+      if (list && list.length) {
+        DB.audits = list.map(function(a, i){
+          return {
+            id: a.id || ('AUD' + (i+1)),
+            no: a.audit_no,
+            type: a.audit_type,
+            dept: DEPTS[0],
+            store: a.store_name || STORES[0],
+            cat: 'All Categories',
+            period: a.period_label,
+            team: a.audit_team_lead,
+            start: a.start_date ? a.start_date.slice(0,10) : TODAY,
+            end: a.end_date ? a.end_date.slice(0,10) : '',
+            status: a.audit_status
+          };
+        });
+        DB.verification = [];
+        list.forEach(function(a){
+          (a.lines || []).forEach(function(l, j){
+            DB.verification.push({
+              id: String(l.id), auditId: a.id,
+              mat: l.item_code,
+              store: a.store_name || STORES[0],
+              book: Number(l.book_qty || 0),
+              phys: Number(l.physical_qty || 0),
+              damaged: 0,
+              expired: 0,
+              missing: l.physical_qty < l.book_qty ? Number(l.book_qty - l.physical_qty) : 0,
+              excess: l.physical_qty > l.book_qty ? Number(l.physical_qty - l.book_qty) : 0,
+              variance: Number((l.physical_qty || 0) - (l.book_qty || 0)),
+              rate: (l.diff_qty ? Number(l.variance_value || 0) / Number(l.diff_qty) : 0) || 0,
+              reason: l.investigation_notes || '',
+              status: l.adjustment_action || 'Pending'
+            });
+          });
+        });
+      }
+    }
+
+    if (dspRes.ok) {
+      const list = await dspRes.json();
+      if (list && list.length) {
+        DB.disposals = list.map(function(d, i){
+          return {
+            id: d.id || ('DSP' + (i+1)),
+            no: d.disp_proposal_no,
+            date: TODAY,
+            mat: d.item_name,
+            store: d.store_name || STORES[0],
+            qty: Number(d.disposal_qty || 0),
+            original: Number(d.book_value_amount || 0),
+            book: Number(d.book_value_amount || 0),
+            residual: Number(d.reserve_price || 0),
+            reason: d.condemnation_reason,
+            method: d.disposal_mode,
+            approval: d.status === 'Pending Approval' ? 'Pending' : 'Approved',
+            status: d.status,
+            value: Number(d.realized_value || 0)
+          };
+        });
+      }
+    }
+
+    const rtvRes = await fetch(API_BASE + '/grn/rtv/all');
+    if (rtvRes.ok) {
+      const list = await rtvRes.json();
+      if (list && list.length) {
+        DB.rtv = list.map(function(r, idx){
+          var vObj = byId(DB.vendors,'party_name', r.vendor_name);
+          return {
+            id: r.id || ('RT'+(idx+1)), no: r.rtv_no, grn: '—', wo: '—',
+            vendor: vObj ? vObj.party_code : (r.vendor_name || VENDORS[0]),
+            mat: r.item_name, qty: Number(r.return_qty || 0), rate: 0,
+            reason: r.return_reason || '', date: r.rtv_date ? r.rtv_date.slice(0,10) : TODAY,
+            mode: 'Vendor pickup', replacement: 'Replacement Pending', ack: 'Pending',
+            status: 'Replacement Pending'
+          };
+        });
+      }
+    }
+
+    const trfRes = await fetch(API_BASE + '/inventory/transfers');
+    if (trfRes.ok) {
+      const list = await trfRes.json();
+      if (list && list.length) {
+        DB.transfers = list.map(function(t, idx){
+          var matObj = byId(DB.materials,'id', t.item_id);
+          return {
+            id: t.id || ('TR'+(idx+1)), no: t.transfer_no,
+            date: t.transfer_date ? t.transfer_date.slice(0,10) : TODAY,
+            mat: matObj ? matObj.code : t.item_name, qty: Number(t.transfer_qty || 0),
+            uom: matObj ? matObj.uom : 'NOS', from: t.from_store_name, to: t.to_store_name,
+            approver: 'Head of Office', challan: t.dispatch_gatepass || '—',
+            dispatched: t.transfer_date ? t.transfer_date.slice(0,10) : '',
+            received: t.status === 'Received' ? (t.transfer_date ? t.transfer_date.slice(0,10) : TODAY) : '',
+            status: t.status
+          };
+        });
+      }
+    }
+
+    const issRes = await fetch(API_BASE + '/inventory/issues');
+    if (issRes.ok) {
+      const list = await issRes.json();
+      if (list && list.length) {
+        var issRows = [];
+        list.forEach(function(i, idx){
+          var ls = (i.lines && i.lines.length) ? i.lines : [{item_id:null, item_name:null, issued_qty:0, unit_rate:0}];
+          ls.forEach(function(l){
+            var matObj = byId(DB.materials,'id', l.item_id);
+            issRows.push({
+              id: i.id || ('IS'+(idx+1)), no: i.issue_no,
+              date: i.issue_date ? i.issue_date.slice(0,10) : TODAY,
+              req: '—', mat: matObj ? matObj.code : l.item_name,
+              qty: Number(l.issued_qty || 0), uom: matObj ? matObj.uom : 'NOS', rate: Number(l.unit_rate || 0),
+              store: i.store_name, dept: DEPTS[0], indentor: '—', recipient: i.receiver_name,
+              gatepass: '—', status: 'Issued'
+            });
+          });
+        });
+        DB.issues = issRows;
+      }
+    }
+
+    const retRes = await fetch(API_BASE + '/inventory/returns');
+    if (retRes.ok) {
+      const list = await retRes.json();
+      if (list && list.length) {
+        DB.returns = list.map(function(r, idx){
+          var matObj = byId(DB.materials,'id', r.item_id);
+          var restocked = DB.movements.some(function(m){ return m.ref===r.return_no && m.type==='RETURN_RESTOCK'; });
+          return {
+            id: r.id || ('RN'+(idx+1)), no: r.return_no, issue: '—',
+            date: r.created_at ? r.created_at.slice(0,10) : TODAY,
+            mat: matObj ? matObj.code : r.item_name, qty: Number(r.return_qty || 0),
+            uom: matObj ? matObj.uom : 'NOS', store: r.store_name, dept: DEPTS[0],
+            condition: r.condition_status || 'Serviceable', reason: '—',
+            restock: restocked ? 'Restocked' : 'Pending restock',
+            status: restocked ? 'Accepted' : 'Under Inspection'
+          };
+        });
+      }
+    }
+
+    const toolRes = await fetch(API_BASE + '/inventory/tool-issuances');
+    if (toolRes.ok) {
+      const list = await toolRes.json();
+      if (list && list.length) {
+        DB.toolIssuances = list.map(function(t, idx){
+          var matObj = byId(DB.materials,'id', t.item_id);
+          return {
+            id: t.id || ('TL'+(idx+1)), no: t.voucher_no,
+            date: t.issue_date ? t.issue_date.slice(0,10) : TODAY,
+            mat: matObj ? matObj.code : t.item_name, serial: t.tool_serial_code || '—',
+            qty: Number(t.issued_qty || 0), store: t.store_name, worker: t.worker_labor_name,
+            idCard: t.worker_id_card || '—', shift: t.shift_name || 'Morning Shift',
+            expected: t.expected_return ? t.expected_return.slice(0,10) : TODAY,
+            returnedQty: Number(t.returned_qty || 0),
+            returnedDate: t.returned_time ? t.returned_time.slice(0,10) : '',
+            condition: t.tool_condition || 'Working', fine: 0,
+            status: t.status || 'Issued', remarks: ''
+          };
+        });
+      }
+    }
+
+    const planRes = await fetch(API_BASE + '/procurement/plans');
+    if (planRes.ok) {
+      const list = await planRes.json();
+      if (list && list.length) {
+        DB.plans = list.map(function(p, idx){
+          return {
+            id: p.id || ('PP' + (idx+1)), no: p.plan_no, reqs: '—',
+            mode: p.proc_mode, value: Number(p.planned_value || 0),
+            officer: 'Anil Katwale', budget: COA[0], ref: '—',
+            expected: addDays(p.created_at ? p.created_at.slice(0,10) : TODAY, 50),
+            insp: 'Yes', warr: 'Yes', asset: 'Yes', status: 'Draft'
+          };
+        });
+      }
+    }
+
+    const tenderRes2 = await fetch(API_BASE + '/procurement/tenders');
+    if (tenderRes2.ok) {
+      const list = await tenderRes2.json();
+      if (list && list.length) {
+        DB.tenders = list.map(function(t, idx){
+          return {
+            id: t.id || ('T' + (idx+1)), no: t.tender_no, date: t.tender_date ? t.tender_date.slice(0,10) : TODAY,
+            title: t.tender_title, dept: DEPTS[0], mode: 'Open Tender',
+            value: Number(t.estimated_cost || 0), fee: Number(t.tender_fee || 0), emd: Number(t.emd_amount || 0),
+            close: t.bid_close_date ? t.bid_close_date.slice(0,10) : addDays(TODAY,21),
+            status: t.status, portal: t.portal_ref_no || 'GNCTD e-Procurement Portal', coa: COA[0]
+          };
+        });
+      }
+    }
+
+    const quoteRes2 = await fetch(API_BASE + '/procurement/quotes');
+    if (quoteRes2.ok) {
+      const list = await quoteRes2.json();
+      if (list && list.length) {
+        DB.quotes = list.map(function(q, idx){
+          var vObj = byId(DB.vendors,'party_name', q.vendor_name);
+          return {
+            id: q.id || ('Q' + (idx+1)), no: 'BID/' + (q.id || idx+1), tender: q.tender_no,
+            vendor: vObj ? vObj.party_code : (q.vendor_name || VENDORS[0]),
+            sub: TODAY, tech: q.is_technically_ok ? 'Qualified' : 'Pending',
+            fin: 'Opened', basic: Number(q.basic_rate||0)*Number(q.quoted_qty||0), tax: 0, freight: 0,
+            insurance: 0, install: 0, other: 0, discount: 0,
+            amount: Number(q.total_bid_value || 0), evaluated: Number(q.total_bid_value || 0),
+            delivery: 30, warranty: 12, terms: '100% within 30 days of accepted GRN', validity: '2026-12-31',
+            rank: q.rank_order || 0, reco: q.is_selected ? 'Recommended' : '',
+            status: q.is_selected ? 'Approved' : 'Under Review', score: 0,
+            deviations: 'Nil', elig: 'To be examined', docs: 'To be verified', qcert: '—',
+            capacity: '—', past: '—', remarks: ''
+          };
+        });
+      }
+    }
+
+    const secRes = await fetch(API_BASE + '/procurement/securities');
+    if (secRes.ok) {
+      const list = await secRes.json();
+      if (list && list.length) {
+        DB.emds = list.filter(function(s){ return s.sec_type==='EMD'; }).map(function(s, idx){
+          var vObj = byId(DB.vendors,'party_name', s.vendor_name);
+          return {
+            id: s.id || ('E'+(idx+1)), tender: s.tender_no || '—',
+            vendor: vObj ? vObj.party_code : (s.vendor_name || VENDORS[0]),
+            amount: Number(s.amount || 0), mode: s.instrument_type, instrType: s.instrument_type,
+            instrNo: s.instrument_no, bank: s.issuing_bank,
+            issue: s.instrument_date ? s.instrument_date.slice(0,10) : TODAY,
+            expiry: s.expiry_date ? s.expiry_date.slice(0,10) : addDays(TODAY,90),
+            verify: 'Verified', status: s.status
+          };
+        });
+        DB.pgs = list.filter(function(s){ return s.sec_type==='PBG'; }).map(function(s, idx){
+          var vObj = byId(DB.vendors,'party_name', s.vendor_name);
+          return {
+            id: s.id || ('P'+(idx+1)), wo: '—', contract: '—',
+            vendor: vObj ? vObj.party_code : (s.vendor_name || VENDORS[0]),
+            amount: Number(s.amount || 0), pctv: 5, instrType: s.instrument_type,
+            instrNo: s.instrument_no, bank: s.issuing_bank,
+            issue: s.instrument_date ? s.instrument_date.slice(0,10) : TODAY,
+            expiry: s.expiry_date ? s.expiry_date.slice(0,10) : addDays(TODAY,180),
+            claim: '6 months beyond warranty', release: addDays(TODAY,180), status: s.status
+          };
+        });
+      }
+    }
+
+    const invRes2 = await fetch(API_BASE + '/billing/invoices');
+    if (invRes2.ok) {
+      const list = await invRes2.json();
+      if (list && list.length) {
+        DB.invoices = list.map(function(i, idx){
+          var vObj = byId(DB.vendors,'party_name', i.vendor_name);
+          return {
+            id: i.id || ('N' + (idx+1)),
+            no: i.inv_no, vinv: i.vendor_inv_no,
+            date: i.vendor_inv_date ? i.vendor_inv_date.slice(0,10) : TODAY,
+            recd: i.vendor_inv_date ? i.vendor_inv_date.slice(0,10) : TODAY,
+            vendor: vObj ? vObj.party_code : (i.vendor_name || VENDORS[0]),
+            wo: i.wo_no, grn: i.grn_no,
+            amount: Number(i.gross_amount || 0),
+            matched: i.match_status==='Matched' ? Number(i.gross_amount || 0) : 0,
+            exception: i.match_status==='Exception' ? Number(i.gross_amount || 0) : 0,
+            ld: 0, retention: 0, tds: 0, gstTds: 0,
+            status: i.match_status || 'Pending',
+            finance: i.payment_status==='Initiated' ? 'Under Review' : 'Approved',
+            payment: i.payment_status==='Paid' ? 'Paid' : 'Pending',
+            billNo: i.payment_status && i.payment_status!=='Initiated' ? i.inv_no : '',
+            utr: i.utr_number || '', remarks: '', attachments: []
+          };
+        });
+      }
+    }
+
+    const adjRes2 = await fetch(API_BASE + '/audit/adjustments');
+    if (adjRes2.ok) {
+      const list = await adjRes2.json();
+      if (list && list.length) {
+        DB.adjustments = list.map(function(a, idx){
+          var qty = Number(a.adj_qty || 0);
+          return {
+            id: a.id || ('AJ' + (idx+1)), no: a.adj_voucher_no,
+            mat: a.item_name, store: a.store_name || STORES[0],
+            book: 0, phys: qty, variance: a.adjustment_type==='Write-Off' ? -qty : qty,
+            rate: qty ? Number(a.adj_value || 0) / qty : 0, value: Number(a.adj_value || 0),
+            reason: a.sanction_order_no || '', doc: '', authority: 'Head of Office',
+            finance: 'Pending', status: 'Approved'
+          };
+        });
+      }
+    }
+
+    if (defRes.ok) {
+      const list = await defRes.json();
+      if (list && list.length) {
+        DB.defects = list.map(function(d, i){
+          return {
+            id: d.id || ('DEF' + (i+1)),
+            no: d.ticket_no,
+            date: d.ticket_date ? d.ticket_date.slice(0,10) : TODAY,
+            mat: d.item_name,
+            serial: '',
+            vendor: d.vendor_name,
+            dept: DEPTS[0],
+            cat: d.defect_category,
+            severity: d.severity,
+            warranty: 'Under Warranty',
+            vendorResp: d.vendor_response || '',
+            due: d.resolution_tat_due ? d.resolution_tat_due.slice(0,10) : TODAY,
+            resolved: d.resolved_date ? d.resolved_date.slice(0,10) : null,
+            status: d.resolution_status
           };
         });
       }
@@ -7160,7 +8069,7 @@ export function initIFMS(){
   DB = Store.get();
   if(!DB || !DB.materials || !DB.materials.length){ DB = seedDB(); save(); }
   ['materials','requisitions','tenders','boq','quotes','workorders','deliveries','grns','inspections',
-   'rtv','stock','movements','issues','returns','transfers','invoices','fees','emds','pgs','warranty',
+   'rtv','stock','movements','issues','returns','transfers','toolIssuances','invoices','fees','emds','pgs','warranty',
    'defects','disposals','audits','verification','adjustments','forecast','assets','portals','trail',
    'notifications','workflows','rules','roles','limits','amendments','plans'].forEach(function(k){
     if(!DB[k]) DB[k] = [];
@@ -7432,6 +8341,8 @@ if (typeof window !== 'undefined') {
   saveReq: saveReq,
   saveResolution: saveResolution,
   saveReturn: saveReturn,
+  saveToolCheckin: saveToolCheckin,
+  saveToolCheckout: saveToolCheckout,
   saveTransfer: saveTransfer,
   saveWo: saveWo,
   saveWorkflow: saveWorkflow,
@@ -7483,6 +8394,8 @@ if (typeof window !== 'undefined') {
   toggleRole: toggleRole,
   toggleRule: toggleRule,
   toggleWorkflow: toggleWorkflow,
+  toolCheckinEntry: toolCheckinEntry,
+  toolCheckoutEntry: toolCheckoutEntry,
   trStock: trStock,
   transferEntry: transferEntry,
   uid: uid,
