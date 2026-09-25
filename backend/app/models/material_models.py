@@ -154,6 +154,8 @@ class MtrlBoq(Base):
     created_by = Column(BigInteger)
     created_at = Column(DateTime(timezone=True), server_default=func.clock_timestamp())
 
+    item = relationship("MtrlItem")
+
 class MtrlParty(Base):
     __tablename__ = "mtrl_party"
     id = Column(BigInteger, primary_key=True, index=True)

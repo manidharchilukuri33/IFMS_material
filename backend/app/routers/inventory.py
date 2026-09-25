@@ -261,15 +261,22 @@ def create_issue(data: dict, db: Session = Depends(get_db)):
     cnt = db.query(MtrlIssue).count() + 1
     iss_no = f"ISS/2026/{cnt:04d}"
 
-    lines_data = data.get("lines", [])
-    tot_val = sum(Decimal(str(l["issued_qty"])) * Decimal(str(l.get("unit_rate", 0))) for l in lines_data)
+    lines_data = data.get("lines") or data.get("items") or []
+    tot_val = Decimal("0.00")
+    for l in lines_data:
+        q = Decimal(str(l.get("issued_qty") or l.get("issued_quantity") or l.get("quantity", 1)))
+        r = Decimal(str(l.get("unit_rate") or l.get("unit_price", 0)))
+        tot_val += q * r
+
+    store_id = data.get("store_id") or data.get("from_store_id", 1)
+    receiver = data.get("receiver_name") or data.get("issued_to_emp") or data.get("issued_to_name", "Staff Member")
 
     issue = MtrlIssue(
         tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,
-        issue_no=iss_no,
+        issue_no=data.get("issue_no") or iss_no,
         issue_date=date.today(),
-        store_id=data["store_id"],
-        receiver_name=data["receiver_name"],
+        store_id=store_id,
+        receiver_name=receiver,
         receiver_user_id=1,
         total_issue_val=tot_val
     )
@@ -277,13 +284,27 @@ def create_issue(data: dict, db: Session = Depends(get_db)):
     db.flush()
 
     for l in lines_data:
-        item = db.query(MtrlItem).filter(MtrlItem.id == l["item_id"]).first()
-        qty = Decimal(str(l["issued_qty"]))
-        rate = Decimal(str(l.get("unit_rate") or (item.estimated_rate if item else 0)))
+        item_id = l.get("item_id")
+        item = None
+        if isinstance(item_id, int):
+            item = db.query(MtrlItem).filter(MtrlItem.id == item_id).first()
+        if not item and item_id:
+            item = db.query(MtrlItem).filter(MtrlItem.item_code == str(item_id)).first()
+        if not item:
+            mat_code = l.get("mat") or l.get("item_code")
+            if mat_code:
+                item = db.query(MtrlItem).filter(MtrlItem.item_code == mat_code).first()
+        if not item:
+            item = db.query(MtrlItem).first()
+
+        final_item_id = item.id if item else 1
+        qty = Decimal(str(l.get("issued_qty") or l.get("issued_quantity") or l.get("quantity", 1)))
+        rate = Decimal(str(l.get("unit_rate") or l.get("unit_price") or (item.estimated_rate if item else 0)))
+
         db.add(MtrlIssLine(
             tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2,
             issue_id=issue.id,
-            item_id=l["item_id"],
+            item_id=final_item_id,
             requested_qty=qty,
             issued_qty=qty,
             unit_rate=rate,
@@ -292,13 +313,13 @@ def create_issue(data: dict, db: Session = Depends(get_db)):
         ))
 
         # Deduct from store stock
-        stk = db.query(MtrlStock).filter(MtrlStock.store_id == data["store_id"], MtrlStock.item_id == l["item_id"]).first()
+        stk = db.query(MtrlStock).filter(MtrlStock.store_id == store_id, MtrlStock.item_id == final_item_id).first()
         if stk:
             stk.available_qty = max(Decimal("0.00"), stk.available_qty - qty)
             stk.total_stock_value = stk.available_qty * stk.avg_unit_cost
 
     db.commit()
-    return {"message": "Stock issued successfully", "id": issue.id, "issue_no": iss_no}
+    return {"message": "Stock issued successfully", "id": issue.id, "issue_no": issue.issue_no}
 
 # ----------------- Stock Returns -----------------
 @router.get("/returns")

@@ -1572,13 +1572,15 @@ SCREENS['dash'] = function(){
       '<button class="btn xs gh" onclick="goto(\'rep/vendor\')">Scorecard</button></div><div class="bd">'+
       '<div class="sec-h">Top performing</div>'+
       vTop.slice(0,3).map(function(v){
+        var ratingVal = (v && typeof v.rating === 'number') ? v.rating : 4.0;
         return '<div class="rag"><span class="s" style="background:#15803D">\u2713</span>'+
-        '<span class="grow">'+esc(v.name)+'</span><b>'+v.rating.toFixed(1)+'</b></div>';
+        '<span class="grow">'+esc(v ? v.name : '')+'</span><b>'+ratingVal.toFixed(1)+'</b></div>';
       }).join('')+
       '<div class="sec-h" style="margin-top:12px">Needs attention</div>'+
       vTop.slice(-2).map(function(v){
+        var ratingVal = (v && typeof v.rating === 'number') ? v.rating : 4.0;
         return '<div class="rag"><span class="s" style="background:#B91C1C">!</span>'+
-        '<span class="grow">'+esc(v.name)+'</span><b>'+v.rating.toFixed(1)+'</b></div>';
+        '<span class="grow">'+esc(v ? v.name : '')+'</span><b>'+ratingVal.toFixed(1)+'</b></div>';
       }).join('')+
       '<div class="rag"><span class="s" style="background:#B45309">\u26A0</span>'+
         '<span class="grow">Open defects with vendors</span><b>'+c.defects+'</b></div>'+
@@ -7442,7 +7444,7 @@ async function syncWithBackend(){
       const dList = await deptRes.json();
       if (dList && dList.length) {
         DEPTS.length = 0;
-        dList.forEach(function(d){ DEPTS.push(d.dept_name); });
+        dList.forEach(function(d){ DEPTS.push(d.dept_name || d.name || d.department_name); });
         DB.departments = dList;
       }
     }
@@ -7450,7 +7452,7 @@ async function syncWithBackend(){
       const sList = await storeRes.json();
       if (sList && sList.length) {
         STORES.length = 0;
-        sList.forEach(function(s){ STORES.push(s.store_name); });
+        sList.forEach(function(s){ STORES.push(s.store_name || s.name); });
         DB.stores = sList;
       }
     }

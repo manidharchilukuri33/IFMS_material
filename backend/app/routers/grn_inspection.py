@@ -168,9 +168,18 @@ def get_grn(id: int, db: Session = Depends(get_db)):
 def create_grn(data: dict, db: Session = Depends(get_db)):
     cnt = db.query(MtrlGrn).count() + 1
     grn_no = data.get("grn_no") or f"GRN/2026/{1045 + cnt:05d}"
-    wo = db.query(MtrlWo).filter(MtrlWo.id == data["wo_id"]).first()
+    wo_id = data.get("wo_id") or data.get("work_order_id")
+    wo = db.query(MtrlWo).filter(MtrlWo.id == wo_id).first() if wo_id else db.query(MtrlWo).first()
     if not wo:
         raise HTTPException(status_code=404, detail="Work order not found")
+
+    challan_no = data.get("challan_no") or f"CH-{random.randint(1000,9999)}"
+    challan_date = date.today()
+    if data.get("challan_date"):
+        try:
+            challan_date = date.fromisoformat(str(data["challan_date"])[:10])
+        except Exception:
+            pass
 
     grn = MtrlGrn(
         tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,
@@ -178,13 +187,13 @@ def create_grn(data: dict, db: Session = Depends(get_db)):
         grn_date=date.today(),
         wo_id=wo.id,
         party_id=wo.party_id,
-        store_id=data.get("store_id", wo.delivery_store_id),
-        challan_no=data["challan_no"],
-        challan_date=date.fromisoformat(data["challan_date"]) if data.get("challan_date") else date.today(),
+        store_id=data.get("store_id", wo.delivery_store_id or 1),
+        challan_no=challan_no,
+        challan_date=challan_date,
         gate_entry_no=data.get("gate_entry_no", f"GE/{random.randint(1000,9999)}"),
         gate_entry_date=datetime.now(),
-        vehicle_number=data.get("vehicle_number"),
-        driver_name=data.get("driver_name"),
+        vehicle_number=data.get("vehicle_number", "DL 1L AA 4012"),
+        driver_name=data.get("driver_name", "Driver"),
         receiver_user_id=1,
         inspection_status="Pending",
         posting_status="Draft",
@@ -193,14 +202,30 @@ def create_grn(data: dict, db: Session = Depends(get_db)):
     db.add(grn)
     db.flush()
 
-    for l in data.get("lines", []):
+    lines_data = data.get("lines") or data.get("items") or []
+    for l in lines_data:
+        item_id = l.get("item_id")
+        item = None
+        if isinstance(item_id, int):
+            item = db.query(MtrlItem).filter(MtrlItem.id == item_id).first()
+        if not item:
+            mat_code = l.get("mat") or l.get("item_code") or (str(item_id) if item_id else None)
+            if mat_code:
+                item = db.query(MtrlItem).filter(MtrlItem.item_code == mat_code).first()
+        if not item:
+            item = db.query(MtrlItem).first()
+        
+        final_item_id = item.id if item else 1
+        c_qty = Decimal(str(l.get("challan_qty") or l.get("ordered_qty") or l.get("received_qty") or l.get("qty", 1)))
+        r_qty = Decimal(str(l.get("received_qty") or c_qty))
+
         db.add(MtrlGrnLine(
             tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2,
             grn_id=grn.id,
             wo_line_id=l.get("wo_line_id", 1),
-            item_id=l["item_id"],
-            challan_qty=Decimal(str(l["challan_qty"])),
-            received_qty=Decimal(str(l.get("received_qty", l["challan_qty"]))),
+            item_id=final_item_id,
+            challan_qty=c_qty,
+            received_qty=r_qty,
             accepted_qty=Decimal("0.00"),
             rejected_qty=Decimal("0.00"),
             batch_number=l.get("batch_number", f"BATCH/{random.randint(100,999)}"),

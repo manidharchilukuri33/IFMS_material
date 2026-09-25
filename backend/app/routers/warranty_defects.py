@@ -84,16 +84,35 @@ def create_defect(data: dict, db: Session = Depends(get_db)):
     cnt = db.query(MtrlDefect).count() + 1
     tkt_no = f"TKT/2026/{20 + cnt:04d}"
 
+    party_id = data.get("party_id") or data.get("vendor_id") or 1
+    defect_desc = data.get("defect_desc") or data.get("defect_description") or "Defect reported during operation"
+    severity = data.get("severity") or data.get("defect_severity") or "Major"
+
+    item_id = data.get("item_id")
+    item = None
+    if isinstance(item_id, int):
+        item = db.query(MtrlItem).filter(MtrlItem.id == item_id).first()
+    if not item and item_id:
+        item = db.query(MtrlItem).filter(MtrlItem.item_code == str(item_id)).first()
+    if not item:
+        mat_code = data.get("mat") or data.get("item_code")
+        if mat_code:
+            item = db.query(MtrlItem).filter(MtrlItem.item_code == mat_code).first()
+    if not item:
+        item = db.query(MtrlItem).first()
+    
+    final_item_id = item.id if item else 1
+
     defect = MtrlDefect(
         tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2,
         ticket_no=tkt_no,
         ticket_date=date.today(),
         warranty_id=data.get("warranty_id"),
-        item_id=data["item_id"],
-        party_id=data["party_id"],
-        defect_category=data.get("defect_category", "Hardware Malfunction"),
-        severity=data.get("severity", "Major"),
-        defect_desc=data["defect_desc"],
+        item_id=final_item_id,
+        party_id=party_id,
+        defect_category=data.get("defect_category") or data.get("defect_type", "Hardware Malfunction"),
+        severity=severity,
+        defect_desc=defect_desc,
         resolution_tat_due=date.today() + timedelta(days=3),
         resolution_status="Reported"
     )

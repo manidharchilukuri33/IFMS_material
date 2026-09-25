@@ -122,39 +122,57 @@ def create_requisition(data: dict, db: Session = Depends(get_db)):
     cnt = db.query(MtrlReq).count() + 1
     req_no = data.get("req_no") or f"MR/DIT/2026/{350 + cnt:06d}"
     
-    lines_data = data.get("lines", [])
-    tot_amt = sum(Decimal(str(l.get("requested_qty", 0))) * Decimal(str(l.get("est_unit_rate", 0))) for l in lines_data)
+    lines_data = data.get("lines") or data.get("items") or []
+    tot_amt = sum(Decimal(str(l.get("requested_qty") or l.get("qty", 0))) * Decimal(str(l.get("est_unit_rate") or l.get("estimated_rate") or l.get("rate", 0))) for l in lines_data)
+
+    req_date = date.today()
+    if data.get("req_date"):
+        try:
+            req_date = date.fromisoformat(str(data["req_date"])[:10])
+        except Exception:
+            pass
 
     req = MtrlReq(
         tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,
         req_no=req_no,
-        req_date=date.fromisoformat(data["req_date"]) if data.get("req_date") else date.today(),
-        target_store_id=data.get("store_id") or 1,
+        req_date=req_date,
+        target_store_id=data.get("store_id") or data.get("target_store_id") or 1,
         priority=data.get("priority", "Normal"),
         purpose=data.get("purpose", "Departmental requirement"),
         total_est_amount=tot_amt,
-        current_stage="Submitted"
+        current_stage=data.get("current_stage", "Submitted")
     )
     db.add(req)
     db.flush()
 
     for l in lines_data:
-        item = db.query(MtrlItem).filter(MtrlItem.id == l["item_id"]).first()
-        qty = Decimal(str(l["requested_qty"]))
-        rate = Decimal(str(l.get("est_unit_rate") or (item.estimated_rate if item else 0)))
+        item_id = l.get("item_id")
+        item = None
+        if isinstance(item_id, int):
+            item = db.query(MtrlItem).filter(MtrlItem.id == item_id).first()
+        if not item:
+            mat_code = l.get("mat") or l.get("item_code") or (str(item_id) if item_id else None)
+            if mat_code:
+                item = db.query(MtrlItem).filter(MtrlItem.item_code == mat_code).first()
+        if not item:
+            item = db.query(MtrlItem).first()
+        
+        final_item_id = item.id if item else 1
+        qty = Decimal(str(l.get("requested_qty") or l.get("qty", 1)))
+        rate = Decimal(str(l.get("est_unit_rate") or l.get("estimated_rate") or l.get("rate") or (item.estimated_rate if item else 0)))
         
         db.add(MtrlReqLine(
             tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2,
             req_id=req.id,
-            item_id=l["item_id"],
+            item_id=final_item_id,
             variant_id=l.get("variant_id"),
             requested_qty=qty,
             approved_qty=qty,
             uom_id=l.get("uom_id") or (item.base_uom_id if item else 1),
             est_unit_rate=rate,
             line_est_amount=qty * rate,
-            preferred_make=l.get("preferred_make") or (item.brand_name if item else None),
-            technical_spec=l.get("technical_spec") or (item.item_desc if item else None)
+            preferred_make=l.get("preferred_make") or l.get("make") or (item.brand_name if item else None),
+            technical_spec=l.get("technical_spec") or l.get("spec") or (item.item_desc if item else None)
         ))
     
     db.commit()

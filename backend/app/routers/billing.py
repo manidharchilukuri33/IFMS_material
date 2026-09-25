@@ -91,20 +91,30 @@ def get_invoice(id: int, db: Session = Depends(get_db)):
 @router.post("/invoices")
 def create_invoice(data: dict, db: Session = Depends(get_db)):
     cnt = db.query(MtrlInvoice).count() + 1
-    inv_no = f"INV/VEN/{4050 + cnt:05d}"
-    wo = db.query(MtrlWo).filter(MtrlWo.id == data["wo_id"]).first()
+    inv_no = data.get("inv_no") or f"INV/VEN/{4050 + cnt:05d}"
+    
+    wo_id = data.get("wo_id") or data.get("work_order_id")
+    wo = db.query(MtrlWo).filter(MtrlWo.id == wo_id).first() if wo_id else db.query(MtrlWo).first()
     if not wo:
         raise HTTPException(status_code=404, detail="Work order not found")
 
-    b_amt = Decimal(str(data["basic_amount"]))
-    t_amt = Decimal(str(data.get("tax_amount", b_amt * Decimal("0.18"))))
+    vendor_inv_no = data.get("vendor_inv_no") or data.get("invoice_no") or data.get("bill_no") or f"VINV-{random.randint(1000,9999)}"
+    vendor_inv_date = date.today()
+    if data.get("vendor_inv_date") or data.get("invoice_date"):
+        try:
+            vendor_inv_date = date.fromisoformat(str(data.get("vendor_inv_date") or data.get("invoice_date"))[:10])
+        except Exception:
+            pass
+
+    b_amt = Decimal(str(data.get("basic_amount") or data.get("amount") or data.get("basic_amt", 10000)))
+    t_amt = Decimal(str(data.get("tax_amount") or data.get("tax_amt", b_amt * Decimal("0.18"))))
     tot = b_amt + t_amt
 
     inv = MtrlInvoice(
         tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,
         inv_no=inv_no,
-        vendor_inv_no=data["vendor_inv_no"],
-        vendor_inv_date=date.fromisoformat(data["vendor_inv_date"]) if data.get("vendor_inv_date") else date.today(),
+        vendor_inv_no=vendor_inv_no,
+        vendor_inv_date=vendor_inv_date,
         wo_id=wo.id,
         grn_id=data.get("grn_id", 1),
         party_id=wo.party_id,

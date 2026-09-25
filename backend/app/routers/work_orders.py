@@ -121,38 +121,64 @@ def create_work_order(data: dict, db: Session = Depends(get_db)):
     cnt = db.query(MtrlWo).count() + 1
     wo_no = data.get("wo_no") or f"PO/DIT/2026/{210 + cnt:05d}"
 
-    lines_data = data.get("lines", [])
-    tot_b = sum(Decimal(str(l["order_qty"])) * Decimal(str(l["unit_rate"])) for l in lines_data)
-    tot_t = sum(Decimal(str(l["order_qty"])) * Decimal(str(l["unit_rate"])) * Decimal(str(l.get("tax_percent", 18.0))) / Decimal("100.0") for l in lines_data)
+    lines_data = data.get("lines") or data.get("items") or []
+    tot_b = Decimal("0.00")
+    tot_t = Decimal("0.00")
+    for l in lines_data:
+        q = Decimal(str(l.get("order_qty") or l.get("quantity") or l.get("qty", 1)))
+        r = Decimal(str(l.get("unit_rate") or l.get("rate") or l.get("unit_price", 0)))
+        t_pct = Decimal(str(l.get("tax_percent") or l.get("gst_rate_pct") or l.get("tax_rate", 18.0)))
+        tot_b += q * r
+        tot_t += q * r * (t_pct / Decimal("100.0"))
+
+    party_id = data.get("party_id") or data.get("vendor_id") or 1
+    due_date = date.today() + timedelta(days=30)
+    if data.get("delivery_due_date"):
+        try:
+            due_date = date.fromisoformat(str(data["delivery_due_date"])[:10])
+        except Exception:
+            pass
 
     wo = MtrlWo(
         tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,
         wo_no=wo_no,
         wo_date=date.today(),
-        party_id=data["party_id"],
-        delivery_store_id=data.get("store_id", 1),
+        party_id=party_id,
+        delivery_store_id=data.get("store_id") or data.get("delivery_store_id", 1),
         tender_id=data.get("tender_id"),
         total_basic_amt=tot_b,
         total_tax_amt=tot_t,
         total_wo_amount=tot_b + tot_t,
         pb_guarantee_amt=(tot_b + tot_t) * Decimal("0.05"),
-        delivery_due_date=date.fromisoformat(data["delivery_due_date"]) if data.get("delivery_due_date") else date.today() + timedelta(days=30),
-        payment_terms=data.get("payment_terms", "100% upon delivery and inspection")
+        delivery_due_date=due_date,
+        payment_terms=data.get("payment_terms", "100% upon delivery and inspection"),
+        status_id=1
     )
     db.add(wo)
     db.flush()
 
     for l in lines_data:
-        item = db.query(MtrlItem).filter(MtrlItem.id == l["item_id"]).first()
-        qty = Decimal(str(l["order_qty"]))
-        rate = Decimal(str(l["unit_rate"]))
-        tax_pct = Decimal(str(l.get("tax_percent", 18.0)))
+        item_id = l.get("item_id")
+        item = None
+        if isinstance(item_id, int):
+            item = db.query(MtrlItem).filter(MtrlItem.id == item_id).first()
+        if not item:
+            mat_code = l.get("mat") or l.get("item_code") or (str(item_id) if item_id else None)
+            if mat_code:
+                item = db.query(MtrlItem).filter(MtrlItem.item_code == mat_code).first()
+        if not item:
+            item = db.query(MtrlItem).first()
+        
+        final_item_id = item.id if item else 1
+        qty = Decimal(str(l.get("order_qty") or l.get("quantity") or l.get("qty", 1)))
+        rate = Decimal(str(l.get("unit_rate") or l.get("rate") or l.get("unit_price", (item.estimated_rate if item else 0))))
+        tax_pct = Decimal(str(l.get("tax_percent") or l.get("gst_rate_pct") or l.get("tax_rate", 18.0)))
         tax_amt = qty * rate * (tax_pct / Decimal("100.0"))
 
         db.add(MtrlWoLine(
             tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2,
             wo_id=wo.id,
-            item_id=l["item_id"],
+            item_id=final_item_id,
             order_qty=qty,
             uom_id=l.get("uom_id") or (item.base_uom_id if item else 1),
             unit_rate=rate,
