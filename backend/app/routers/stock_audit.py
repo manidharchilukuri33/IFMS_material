@@ -46,8 +46,14 @@ def list_audit_schedules(db: Session = Depends(get_db)):
 
 @router.post("/schedules")
 def create_audit_schedule(data: dict, db: Session = Depends(get_db)):
-    cnt = db.query(MtrlAudit).count() + 1
-    a_no = f"PV/2026/{cnt:04d}"
+    req_no = data.get("audit_code") or data.get("audit_number")
+    if req_no and not db.query(MtrlAudit).filter(MtrlAudit.audit_no == req_no).first():
+        a_no = req_no
+    else:
+        cnt = db.query(MtrlAudit).count() + 1
+        while db.query(MtrlAudit).filter(MtrlAudit.audit_no == f"PV/2026/{cnt:04d}").first():
+            cnt += 1
+        a_no = f"PV/2026/{cnt:04d}"
 
     audit = MtrlAudit(
         tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,

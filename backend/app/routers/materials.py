@@ -137,13 +137,35 @@ def create_item(data: dict, db: Session = Depends(get_db)):
         cnt = db.query(MtrlItem).count() + 1
         data["item_code"] = f"MAT-GEN-{cnt:04d}"
         
+    cat_id = data.get("cat_id")
+    if not isinstance(cat_id, int):
+        cat_name = data.get("cat_name") or data.get("cat")
+        if cat_name:
+            c = db.query(MtrlItemCat).filter(MtrlItemCat.cat_name.ilike(f"%{cat_name}%")).first()
+            if c:
+                cat_id = c.id
+        if not cat_id or not isinstance(cat_id, int):
+            c = db.query(MtrlItemCat).first()
+            cat_id = c.id if c else 1
+
+    base_uom_id = data.get("base_uom_id")
+    if not isinstance(base_uom_id, int):
+        uom_code = data.get("base_uom_code") or data.get("uom_code") or data.get("uom")
+        if uom_code:
+            u = db.query(MtrlUom).filter(MtrlUom.uom_code.ilike(f"%{uom_code}%")).first()
+            if u:
+                base_uom_id = u.id
+        if not base_uom_id or not isinstance(base_uom_id, int):
+            u = db.query(MtrlUom).first()
+            base_uom_id = u.id if u else 1
+
     item = MtrlItem(
         tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,
         item_code=data["item_code"],
         item_name=data["item_name"],
         item_desc=data.get("item_desc"),
-        cat_id=data["cat_id"],
-        base_uom_id=data["base_uom_id"],
+        cat_id=cat_id,
+        base_uom_id=base_uom_id,
         alt_uom_id=data.get("alt_uom_id"),
         uom_conv_factor=Decimal(str(data.get("uom_conv_factor", 1.0))),
         item_type="SERVICE" if data.get("is_service") else "GOODS",

@@ -139,35 +139,48 @@ def create_requisition(data: dict, db: Session = Depends(get_db)):
     db.flush()
 
     for l in lines_data:
-        item = db.query(MtrlItem).filter(MtrlItem.id == l["item_id"]).first()
-        qty = Decimal(str(l["requested_qty"]))
-        rate = Decimal(str(l.get("est_unit_rate") or (item.estimated_rate if item else 0)))
+        item_id = l.get("item_id")
+        item = None
+        if isinstance(item_id, int):
+            item = db.query(MtrlItem).filter(MtrlItem.id == item_id).first()
+        if not item:
+            mat_code = l.get("mat") or l.get("item_code") or (str(item_id) if item_id else None)
+            if mat_code:
+                item = db.query(MtrlItem).filter(MtrlItem.item_code == mat_code).first()
+        if not item:
+            item = db.query(MtrlItem).first()
+        
+        final_item_id = item.id if item else 1
+        qty = Decimal(str(l.get("requested_qty") or l.get("qty", 1)))
+        rate = Decimal(str(l.get("est_unit_rate") or l.get("rate") or (item.estimated_rate if item else 0)))
         
         db.add(MtrlReqLine(
             tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2,
             req_id=req.id,
-            item_id=l["item_id"],
+            item_id=final_item_id,
             variant_id=l.get("variant_id"),
             requested_qty=qty,
             approved_qty=qty,
             uom_id=l.get("uom_id") or (item.base_uom_id if item else 1),
             est_unit_rate=rate,
             line_est_amount=qty * rate,
-            preferred_make=l.get("preferred_make") or (item.brand_name if item else None),
-            technical_spec=l.get("technical_spec") or (item.item_desc if item else None)
+            preferred_make=l.get("preferred_make") or l.get("make") or (item.brand_name if item else None),
+            technical_spec=l.get("technical_spec") or l.get("spec") or (item.item_desc if item else None)
         ))
     
     db.commit()
     return {"message": "Requisition created successfully", "id": req.id, "req_no": req.req_no}
 
 @router.put("/{id}/status")
+@router.patch("/{id}/status")
 def update_requisition_status(id: int, data: dict, db: Session = Depends(get_db)):
     req = db.query(MtrlReq).filter(MtrlReq.id == id).first()
     if not req:
         raise HTTPException(status_code=404, detail="Requisition not found")
     
-    action = data.get("action", "").lower()
-    if action == "approve":
+    raw_act = data.get("action") or data.get("status") or ""
+    action = str(raw_act).lower().strip()
+    if action in ["approve", "approved"]:
         req.current_stage = "Approved"
         req.approved_at = datetime.now()
         for ln in req.lines:

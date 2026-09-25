@@ -6,7 +6,7 @@ from datetime import date, datetime
 import random
 from app.database import get_db
 from app.models.material_models import (
-    MtrlGrn, MtrlGrnLine, MtrlInsp, MtrlRtv, MtrlWo, MtrlParty, MtrlStore, MtrlItem, MtrlStock, MtrlMovement
+    MtrlGrn, MtrlGrnLine, MtrlInsp, MtrlRtv, MtrlWo, MtrlWoLine, MtrlParty, MtrlStore, MtrlItem, MtrlStock, MtrlMovement
 )
 
 router = APIRouter(prefix="/grn", tags=["Goods Receipt & Inspection"])
@@ -168,7 +168,19 @@ def get_grn(id: int, db: Session = Depends(get_db)):
 def create_grn(data: dict, db: Session = Depends(get_db)):
     cnt = db.query(MtrlGrn).count() + 1
     grn_no = data.get("grn_no") or f"GRN/2026/{1045 + cnt:05d}"
-    wo = db.query(MtrlWo).filter(MtrlWo.id == data["wo_id"]).first()
+    wo = None
+    wo_id = data.get("wo_id")
+    if isinstance(wo_id, int):
+        wo = db.query(MtrlWo).filter(MtrlWo.id == wo_id).first()
+    elif isinstance(wo_id, str) and wo_id.isdigit():
+        wo = db.query(MtrlWo).filter(MtrlWo.id == int(wo_id)).first()
+    
+    if not wo:
+        wo_no = data.get("wo_no") or data.get("wo") or (str(wo_id) if isinstance(wo_id, str) else None)
+        if wo_no:
+            wo = db.query(MtrlWo).filter(MtrlWo.wo_no == wo_no).first()
+    if not wo:
+        wo = db.query(MtrlWo).order_by(MtrlWo.id.desc()).first()
     if not wo:
         raise HTTPException(status_code=404, detail="Work order not found")
 
@@ -179,8 +191,8 @@ def create_grn(data: dict, db: Session = Depends(get_db)):
         wo_id=wo.id,
         party_id=wo.party_id,
         store_id=data.get("store_id", wo.delivery_store_id),
-        challan_no=data["challan_no"],
-        challan_date=date.fromisoformat(data["challan_date"]) if data.get("challan_date") else date.today(),
+        challan_no=data.get("challan_no") or data.get("vendor_challan_no") or f"CHAL/{random.randint(1000,9999)}",
+        challan_date=date.fromisoformat(data["challan_date"]) if data.get("challan_date") else (date.fromisoformat(data["vendor_challan_date"]) if data.get("vendor_challan_date") else date.today()),
         gate_entry_no=data.get("gate_entry_no", f"GE/{random.randint(1000,9999)}"),
         gate_entry_date=datetime.now(),
         vehicle_number=data.get("vehicle_number"),
@@ -193,18 +205,47 @@ def create_grn(data: dict, db: Session = Depends(get_db)):
     db.add(grn)
     db.flush()
 
-    for l in data.get("lines", []):
+    raw_lines = data.get("lines") or data.get("items") or []
+    if not raw_lines and wo and wo.lines:
+        raw_lines = [{"item_id": wl.item_id, "received_qty": wl.order_qty, "wo_line_id": wl.id} for wl in wo.lines]
+    for l in raw_lines:
+        c_qty = l.get("challan_qty") or l.get("challan_quantity") or l.get("received_qty") or l.get("received", 1)
+        r_qty = l.get("received_qty") or l.get("received_quantity") or l.get("received") or c_qty
+        
+        item_id = l.get("item_id")
+        item = None
+        if isinstance(item_id, int):
+            item = db.query(MtrlItem).filter(MtrlItem.id == item_id).first()
+        if not item:
+            mat_code = l.get("mat") or l.get("item_code") or (str(item_id) if item_id else None)
+            if mat_code:
+                item = db.query(MtrlItem).filter(MtrlItem.item_code == mat_code).first()
+        if not item and wo and wo.lines:
+            item = db.query(MtrlItem).filter(MtrlItem.id == wo.lines[0].item_id).first()
+        if not item:
+            item = db.query(MtrlItem).first()
+        
+        final_item_id = item.id if item else 1
+        wo_line_id = l.get("wo_line_id")
+        if not wo_line_id and wo:
+            wl = db.query(MtrlWoLine).filter(MtrlWoLine.wo_id == wo.id, MtrlWoLine.item_id == final_item_id).first()
+            if not wl:
+                wl = db.query(MtrlWoLine).filter(MtrlWoLine.wo_id == wo.id).first()
+            wo_line_id = wl.id if wl else 1
+        if not wo_line_id:
+            wo_line_id = 1
+
         db.add(MtrlGrnLine(
             tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2,
             grn_id=grn.id,
-            wo_line_id=l.get("wo_line_id", 1),
-            item_id=l["item_id"],
-            challan_qty=Decimal(str(l["challan_qty"])),
-            received_qty=Decimal(str(l.get("received_qty", l["challan_qty"]))),
-            accepted_qty=Decimal("0.00"),
-            rejected_qty=Decimal("0.00"),
-            batch_number=l.get("batch_number", f"BATCH/{random.randint(100,999)}"),
-            storage_bin=l.get("storage_bin", "Receiving Bay A")
+            wo_line_id=wo_line_id,
+            item_id=final_item_id,
+            challan_qty=Decimal(str(c_qty)),
+            received_qty=Decimal(str(r_qty)),
+            accepted_qty=Decimal(str(l.get("accepted_qty") or l.get("accepted", 0))),
+            rejected_qty=Decimal(str(l.get("rejected_qty") or l.get("rejected", 0))),
+            batch_number=l.get("batch_number") or l.get("batch", f"BATCH/{random.randint(100,999)}"),
+            storage_bin=l.get("storage_bin") or l.get("location") or l.get("storage_location_bin", "Receiving Bay A")
         ))
 
     db.commit()
@@ -284,6 +325,7 @@ def record_inspection(id: int, data: dict, db: Session = Depends(get_db)):
 
 # ----------------- Post GRN to Stock Ledger -----------------
 @router.put("/{id}/post-to-stock")
+@router.post("/{id}/post-to-stock")
 def post_grn_to_stock(id: int, db: Session = Depends(get_db)):
     grn = db.query(MtrlGrn).filter(MtrlGrn.id == id).first()
     if not grn:

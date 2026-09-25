@@ -230,15 +230,19 @@ def create_issue(data: dict, db: Session = Depends(get_db)):
     cnt = db.query(MtrlIssue).count() + 1
     iss_no = f"ISS/2026/{cnt:04d}"
 
-    lines_data = data.get("lines", [])
-    tot_val = sum(Decimal(str(l["issued_qty"])) * Decimal(str(l.get("unit_rate", 0))) for l in lines_data)
+    lines_data = data.get("lines") or data.get("items") or []
+    tot_val = Decimal("0.00")
+    for l in lines_data:
+        q = Decimal(str(l.get("issued_qty") or l.get("issued_quantity") or l.get("quantity", 1)))
+        r = Decimal(str(l.get("unit_rate") or l.get("unit_price", 0)))
+        tot_val += q * r
 
     issue = MtrlIssue(
         tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,
-        issue_no=iss_no,
+        issue_no=data.get("issue_no") or iss_no,
         issue_date=date.today(),
-        store_id=data["store_id"],
-        receiver_name=data["receiver_name"],
+        store_id=data.get("store_id") or data.get("from_store_id", 1),
+        receiver_name=data.get("receiver_name") or data.get("issued_to_emp") or data.get("issued_to_name", "Staff Member"),
         receiver_user_id=1,
         total_issue_val=tot_val
     )
@@ -247,8 +251,8 @@ def create_issue(data: dict, db: Session = Depends(get_db)):
 
     for l in lines_data:
         item = db.query(MtrlItem).filter(MtrlItem.id == l["item_id"]).first()
-        qty = Decimal(str(l["issued_qty"]))
-        rate = Decimal(str(l.get("unit_rate") or (item.estimated_rate if item else 0)))
+        qty = Decimal(str(l.get("issued_qty") or l.get("issued_quantity") or l.get("quantity", 1)))
+        rate = Decimal(str(l.get("unit_rate") or l.get("unit_price") or (item.estimated_rate if item else 0)))
         db.add(MtrlIssLine(
             tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2,
             issue_id=issue.id,

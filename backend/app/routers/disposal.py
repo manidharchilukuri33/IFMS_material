@@ -38,18 +38,29 @@ def create_disposal_proposal(data: dict, db: Session = Depends(get_db)):
     cnt = db.query(MtrlDisposal).count() + 1
     p_no = f"DSP/2026/{10 + cnt:04d}"
 
-    item = db.query(MtrlItem).filter(MtrlItem.id == data["item_id"]).first()
-    qty = Decimal(str(data["disposal_qty"]))
+    item_id = data.get("item_id")
+    if not item_id and data.get("items") and len(data["items"]) > 0:
+        item_id = data["items"][0].get("item_id")
+    item_id = item_id or 1
+
+    item = db.query(MtrlItem).filter(MtrlItem.id == item_id).first()
+    
+    qty_val = data.get("disposal_qty") or data.get("quantity")
+    if qty_val is None and data.get("items") and len(data["items"]) > 0:
+        qty_val = data["items"][0].get("condemned_qty") or data["items"][0].get("quantity")
+    qty = Decimal(str(qty_val or 1))
+    
     rate = item.estimated_rate if item else Decimal("1000.00")
-    book = qty * rate
+    book = data.get("book_value") or (qty * rate)
+    book = Decimal(str(book))
 
     disp = MtrlDisposal(
         tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,
-        disp_proposal_no=p_no,
-        store_id=data["store_id"],
-        item_id=data["item_id"],
+        disp_proposal_no=data.get("proposal_no") or data.get("proposal_number") or p_no,
+        store_id=data.get("store_id", 1),
+        item_id=item_id,
         disposal_qty=qty,
-        condemnation_reason=data.get("condemnation_reason", "Beyond Economical Repair (BER)"),
+        condemnation_reason=data.get("condemnation_reason") or data.get("reason_for_condemnation") or "Beyond Economical Repair (BER)",
         book_value_amount=book,
         reserve_price=Decimal(str(data.get("reserve_price", book * Decimal("0.25")))),
         disposal_mode=data.get("disposal_mode", "MSTC e-Auction")

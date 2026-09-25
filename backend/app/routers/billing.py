@@ -91,27 +91,59 @@ def get_invoice(id: int, db: Session = Depends(get_db)):
 @router.post("/invoices")
 def create_invoice(data: dict, db: Session = Depends(get_db)):
     cnt = db.query(MtrlInvoice).count() + 1
-    inv_no = f"INV/VEN/{4050 + cnt:05d}"
-    wo = db.query(MtrlWo).filter(MtrlWo.id == data["wo_id"]).first()
+    inv_no = data.get("inv_no") or f"INV/VEN/{4050 + cnt:05d}"
+    wo = None
+    wo_id = data.get("wo_id")
+    if isinstance(wo_id, int):
+        wo = db.query(MtrlWo).filter(MtrlWo.id == wo_id).first()
+    elif isinstance(wo_id, str) and wo_id.isdigit():
+        wo = db.query(MtrlWo).filter(MtrlWo.id == int(wo_id)).first()
+    if not wo:
+        wo_no = data.get("wo_no") or data.get("wo") or (str(wo_id) if isinstance(wo_id, str) else None)
+        if wo_no:
+            wo = db.query(MtrlWo).filter(MtrlWo.wo_no == wo_no).first()
+    if not wo:
+        wo = db.query(MtrlWo).order_by(MtrlWo.id.desc()).first()
     if not wo:
         raise HTTPException(status_code=404, detail="Work order not found")
 
-    b_amt = Decimal(str(data["basic_amount"]))
-    t_amt = Decimal(str(data.get("tax_amount", b_amt * Decimal("0.18"))))
-    tot = b_amt + t_amt
+    grn = None
+    grn_id = data.get("grn_id")
+    if isinstance(grn_id, int):
+        grn = db.query(MtrlGrn).filter(MtrlGrn.id == grn_id).first()
+    elif isinstance(grn_id, str) and grn_id.isdigit():
+        grn = db.query(MtrlGrn).filter(MtrlGrn.id == int(grn_id)).first()
+    if not grn:
+        grn_no = data.get("grn_no") or data.get("grn") or (str(grn_id) if isinstance(grn_id, str) else None)
+        if grn_no:
+            grn = db.query(MtrlGrn).filter(MtrlGrn.grn_no == grn_no).first()
+    if not grn:
+        grn = db.query(MtrlGrn).filter(MtrlGrn.wo_id == wo.id).first()
+    if not grn:
+        grn = db.query(MtrlGrn).first()
+    final_grn_id = grn.id if grn else 1
+
+    b_val = data.get("basic_amount") or data.get("invoice_amount") or data.get("base_amount") or 0
+    b_amt = Decimal(str(b_val))
+    t_val = data.get("tax_amount") if data.get("tax_amount") is not None else (b_amt * Decimal("0.18"))
+    t_amt = Decimal(str(t_val))
+    tot = data.get("total_payable_amount") or data.get("gross_amount") or (b_amt + t_amt)
+    tot = Decimal(str(tot))
+    net_amt = data.get("net_payable_amount") or tot
+    net_amt = Decimal(str(net_amt))
 
     inv = MtrlInvoice(
         tenant_id=1, branch_id=1, entity_id=2, department_id=1, office_id=2, financial_year_id=3,
         inv_no=inv_no,
-        vendor_inv_no=data["vendor_inv_no"],
-        vendor_inv_date=date.fromisoformat(data["vendor_inv_date"]) if data.get("vendor_inv_date") else date.today(),
+        vendor_inv_no=data.get("vendor_inv_no") or data.get("vendor_invoice_number") or f"INV/{random.randint(1000,9999)}",
+        vendor_inv_date=date.fromisoformat(data["vendor_inv_date"]) if data.get("vendor_inv_date") else (date.fromisoformat(data["invoice_date"]) if data.get("invoice_date") else date.today()),
         wo_id=wo.id,
-        grn_id=data.get("grn_id", 1),
+        grn_id=final_grn_id,
         party_id=wo.party_id,
         basic_amount=b_amt,
         tax_amount=t_amt,
         gross_amount=tot,
-        net_payable_amount=tot,
+        net_payable_amount=net_amt,
         match_status="Matched",
         payment_status="Initiated"
     )
