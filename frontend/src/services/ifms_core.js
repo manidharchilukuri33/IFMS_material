@@ -6921,7 +6921,7 @@ export function initIFMS(){
   toast('IFMS Material Management Module & Live PostgreSQL Database Loaded.','ok',4000);
 }
 
-// Attach all top-level functions and state to window so HTML inline onclicks/onchanges and console work seamlessly
+// Attach all top-level UI and action functions to window
 if (typeof window !== 'undefined') {
   var globalExports = {
   actIcon: actIcon,
@@ -6999,7 +6999,6 @@ if (typeof window !== 'undefined') {
   expiryCell: expiryCell,
   exportCsv: exportCsv,
   extendPg: extendPg,
-  f: f,
   fdate: fdate,
   fdatetime: fdatetime,
   filterBar: filterBar,
@@ -7013,6 +7012,7 @@ if (typeof window !== 'undefined') {
   grnFromDelivery: grnFromDelivery,
   grnWoInfo: grnWoInfo,
   hbar: hbar,
+  initIFMS: initIFMS,
   initiateProc: initiateProc,
   inr: inr,
   inr0: inr0,
@@ -7027,7 +7027,6 @@ if (typeof window !== 'undefined') {
   ivFromGrn: ivFromGrn,
   kpiTile: kpiTile,
   kvRow: kvRow,
-  labelOf: labelOf,
   loadMaterial: loadMaterial,
   logAudit: logAudit,
   logoutSim: logoutSim,
@@ -7040,9 +7039,7 @@ if (typeof window !== 'undefined') {
   matchPanel: matchPanel,
   matchResult: matchResult,
   materialAudit: materialAudit,
-  mcode: mcode,
   mname: mname,
-  mnm: mnm,
   modal: modal,
   mrate: mrate,
   mreorder: mreorder,
@@ -7071,7 +7068,6 @@ if (typeof window !== 'undefined') {
   postVariances: postVariances,
   priBadge: priBadge,
   printWo: printWo,
-  push: push,
   qeCalc: qeCalc,
   quoteEntry: quoteEntry,
   raiseDefect: raiseDefect,
@@ -7222,23 +7218,14 @@ if (typeof window !== 'undefined') {
   woPullReqLines: woPullReqLines,
   woTotals: woTotals,
   woVendorInfo: woVendorInfo,
-  workflowEntry: workflowEntry,
-  DB: DB,
-  USER: USER,
-  FY: FY,
-  ROUTE: ROUTE,
-  Store: Store,
-  DEPTS: DEPTS,
-  STORES: STORES,
-  COA: COA,
-  MODES: MODES,
-  CATS: CATS,
-  MTYPES: MTYPES,
-  UOMS: UOMS,
-  VENDORS: VENDORS
+  workflowEntry: workflowEntry
   };
   for (var key in globalExports) {
     window[key] = globalExports[key];
   }
+  try { window.DB = DB; } catch(e) {}
+  try { window.Store = Store; } catch(e) {}
+  try { window.SCREENS = SCREENS; } catch(e) {}
+  try { window.ROUTE = ROUTE; } catch(e) {}
 }
 
