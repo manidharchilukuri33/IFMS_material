@@ -37,22 +37,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include all module routers under /api/v1
-api_prefix = "/api/v1"
-app.include_router(dashboard.router, prefix=api_prefix)
-app.include_router(materials.router, prefix=api_prefix)
-app.include_router(requisitions.router, prefix=api_prefix)
-app.include_router(procurement.router, prefix=api_prefix)
-app.include_router(work_orders.router, prefix=api_prefix)
-app.include_router(grn_inspection.router, prefix=api_prefix)
-app.include_router(inventory.router, prefix=api_prefix)
-app.include_router(billing.router, prefix=api_prefix)
-app.include_router(warranty_defects.router, prefix=api_prefix)
-app.include_router(disposal.router, prefix=api_prefix)
-app.include_router(stock_audit.router, prefix=api_prefix)
-app.include_router(forecasting.router, prefix=api_prefix)
-app.include_router(reports.router, prefix=api_prefix)
-app.include_router(administration.router, prefix=api_prefix)
+# Include all module routers under /api/v1 and /api
+for api_prefix in ["/api/v1", "/api"]:
+    app.include_router(dashboard.router, prefix=api_prefix)
+    app.include_router(materials.router, prefix=api_prefix)
+    app.include_router(requisitions.router, prefix=api_prefix)
+    app.include_router(procurement.router, prefix=api_prefix)
+    app.include_router(work_orders.router, prefix=api_prefix)
+    app.include_router(grn_inspection.router, prefix=api_prefix)
+    app.include_router(inventory.router, prefix=api_prefix)
+    app.include_router(billing.router, prefix=api_prefix)
+    app.include_router(warranty_defects.router, prefix=api_prefix)
+    app.include_router(disposal.router, prefix=api_prefix)
+    app.include_router(stock_audit.router, prefix=api_prefix)
+    app.include_router(forecasting.router, prefix=api_prefix)
+    app.include_router(reports.router, prefix=api_prefix)
+    app.include_router(administration.router, prefix=api_prefix)
+    # Support both /administration and /admin, /warranty and /warranty-defects, /audit and /stock-audit
+    app.include_router(administration.router, prefix=api_prefix + "/administration")
+    app.include_router(warranty_defects.router, prefix=api_prefix + "/warranty-defects")
+    app.include_router(stock_audit.router, prefix=api_prefix + "/stock-audit")
 
 @app.get("/")
 def root():

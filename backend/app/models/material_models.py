@@ -856,6 +856,7 @@ class MtrlSecurity(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.clock_timestamp())
 
     party = relationship("MtrlParty")
+    tender = relationship("MtrlTender")
 
 class MtrlWarranty(Base):
     __tablename__ = "mtrl_warranty"

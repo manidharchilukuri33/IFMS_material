@@ -6811,57 +6811,315 @@ var API_BASE = 'http://127.0.0.1:8002/api/v1';
 async function syncWithBackend(){
   try {
     const res = await fetch(API_BASE + '/dashboard/stats');
-    if (res.ok) {
-      const modeEl = document.getElementById('storeMode');
-      if (modeEl) modeEl.textContent = 'Connected: PostgreSQL 17 (ifms_jk)';
-      
-      // Fetch live items from database
-      const [matRes, reqRes, woRes, grnRes, invRes] = await Promise.all([
-        fetch(API_BASE + '/materials/items'),
-        fetch(API_BASE + '/requisitions/'),
-        fetch(API_BASE + '/work-orders/'),
-        fetch(API_BASE + '/grn/'),
-        fetch(API_BASE + '/billing/invoices')
-      ]);
-      
-      if (matRes.ok) {
-        const liveItems = await matRes.json();
-        if (liveItems && liveItems.length) {
-          liveItems.forEach(function(it){
-            var existing = DB.materials.find(function(m){ return m.code === it.item_code || m.id === it.id; });
-            if (!existing) {
-              DB.materials.push({
-                id: it.id,
-                code: it.item_code,
-                name: it.item_name,
-                cat: it.cat_name || 'IT & Telecom Goods',
-                subcat: it.item_desc || 'Hardware & Office Systems',
-                uom: it.base_uom_code || 'NOS',
-                type: it.is_service ? 'Service' : 'Goods',
-                stock: it.is_stockable ? 'Stock' : 'Non-Stock',
-                cap: it.is_capital ? 'Capital' : 'Revenue',
-                rate: it.estimated_rate || 0,
-                gst: it.gst_rate_pct || 18,
-                hsn: it.hsn_sac_code || '8471',
-                status: it.is_active ? 'Active' : 'Inactive',
-                min: it.min_stock_level || 0,
-                max: it.max_stock_level || 100,
-                reorder: it.reorder_level || 20,
-                lead: it.lead_time_days || 7
-              });
-            }
-          });
-        }
+    if (!res.ok) return;
+
+    const modeEl = document.getElementById('storeMode');
+    if (modeEl) modeEl.textContent = 'Live PostgreSQL 17 (ifms_jk)';
+
+    // 1. Fetch Masters Dynamically
+    const [deptRes, storeRes, vendorRes, catRes, uomRes] = await Promise.all([
+      fetch(API_BASE + '/admin/departments'),
+      fetch(API_BASE + '/inventory/stores'),
+      fetch(API_BASE + '/admin/parties'),
+      fetch(API_BASE + '/materials/categories'),
+      fetch(API_BASE + '/materials/uoms')
+    ]);
+
+    if (deptRes.ok) {
+      const dList = await deptRes.json();
+      if (dList && dList.length) {
+        DEPTS.length = 0;
+        dList.forEach(function(d){ DEPTS.push(d.name || d.department_name); });
+        DB.departments = dList;
       }
-      
-      save();
-      refreshNavCounts();
     }
+    if (storeRes.ok) {
+      const sList = await storeRes.json();
+      if (sList && sList.length) {
+        STORES.length = 0;
+        sList.forEach(function(s){ STORES.push(s.store_name); });
+        DB.stores = sList;
+      }
+    }
+    if (vendorRes.ok) {
+      const vList = await vendorRes.json();
+      if (vList && vList.length) {
+        VENDORS.length = 0;
+        vList.forEach(function(v){ VENDORS.push(v.party_name); });
+        DB.vendors = vList;
+      }
+    }
+    if (catRes.ok) {
+      const cList = await catRes.json();
+      if (cList && cList.length) {
+        cList.forEach(function(c){
+          var name = c.cat_name || c.name;
+          if (name && !CATS[name]) CATS[name] = ['General', 'Supplies'];
+        });
+        DB.categories = cList;
+      }
+    }
+    if (uomRes.ok) {
+      const uList = await uomRes.json();
+      if (uList && uList.length) {
+        UOMS.length = 0;
+        uList.forEach(function(u){ UOMS.push(u.uom_code); });
+        DB.uoms = uList;
+      }
+    }
+
+    // 2. Fetch Module Records Dynamically
+    const [matRes, reqRes, woRes, grnRes, stockRes, movRes, notifRes, audRes, dspRes, defRes] = await Promise.all([
+      fetch(API_BASE + '/materials/items'),
+      fetch(API_BASE + '/requisitions/'),
+      fetch(API_BASE + '/work-orders/'),
+      fetch(API_BASE + '/grn/'),
+      fetch(API_BASE + '/inventory/stock'),
+      fetch(API_BASE + '/inventory/movements'),
+      fetch(API_BASE + '/admin/notifications'),
+      fetch(API_BASE + '/audit/schedules'),
+      fetch(API_BASE + '/disposal/proposals'),
+      fetch(API_BASE + '/warranty/defects')
+    ]);
+
+    if (matRes.ok) {
+      const list = await matRes.json();
+      if (list && list.length) {
+        DB.materials = list.map(function(it, i){
+          return {
+            id: it.id || ('M' + (i+1)),
+            code: it.item_code,
+            name: it.item_name,
+            cat: it.cat_name || 'IT & Telecom Goods',
+            sub: it.item_desc || 'Hardware & Office Systems',
+            uom: it.base_uom_code || 'NOS',
+            fin: it.is_capital ? 'Capital' : 'Revenue',
+            asset: it.is_capital ? 'Y' : 'N',
+            type: it.is_service ? 'Service' : 'Goods',
+            stockType: it.is_stockable ? 'Stock' : 'Non-Stock',
+            consumable: it.is_capital ? 'Non-Consumable' : 'Consumable',
+            hazardous: false,
+            perishable: false,
+            rate: Number(it.estimated_rate || 0),
+            gst: Number(it.gst_rate_pct || 18),
+            hsn: it.hsn_sac_code || '8471',
+            status: it.is_active ? 'Active' : 'Inactive',
+            reorder: Number(it.reorder_level || 20),
+            minStock: Number(it.min_stock_level || 10),
+            maxStock: Number(it.max_stock_level || 100),
+            reorderQty: Number(it.reorder_qty || 40),
+            leadTime: Number(it.lead_time_days || 21),
+            make: it.make_model || '',
+            model: it.make_model || '',
+            spec: it.specifications || it.item_desc || '',
+            coa: COA[0],
+            fund: FUNDS[0],
+            scheme: SCHEMES[0],
+            project: PROJECTS[0],
+            costCentre: COST_CENTRES[0],
+            warrantyMonths: 12,
+            warrantyApplicable: it.is_capital,
+            disposalCat: it.is_capital ? 'Asset — Condemnation Board' : 'Consumable — Write-off',
+            updated: TODAY,
+            createdBy: 'Anil Katwale',
+            attachments: []
+          };
+        });
+      }
+    }
+
+    if (reqRes.ok) {
+      const list = await reqRes.json();
+      if (list && list.length) {
+        DB.requisitions = list.map(function(r, i){
+          return {
+            id: r.id || ('R' + (i+1)),
+            no: r.req_no,
+            date: r.req_date ? r.req_date.slice(0,10) : TODAY,
+            dept: r.department || DEPTS[0],
+            office: 'Head Office',
+            section: 'Procurement Section',
+            requestor: 'Anil Katwale',
+            priority: r.priority || 'Normal',
+            mode: 'Open Tender',
+            purpose: r.purpose || 'Departmental operational requirement',
+            location: r.store_name || STORES[0],
+            requiredBy: addDays(TODAY, 30),
+            coa: COA[0],
+            fund: FUNDS[0],
+            scheme: SCHEMES[0],
+            project: PROJECTS[0],
+            costCentre: COST_CENTRES[0],
+            availBudget: 5000000,
+            value: Number(r.estimated_cost || 0),
+            lines: (r.items || []).map(function(l){
+              return {
+                mat: l.item_code,
+                desc: l.item_name,
+                qty: Number(l.requested_qty || 1),
+                uom: l.uom || 'NOS',
+                rate: Number(l.estimated_rate || 0),
+                make: '',
+                spec: ''
+              };
+            }),
+            budget: 'Available',
+            stockAvail: 'Not Available',
+            status: r.current_stage || 'Submitted',
+            approver: r.current_stage === 'Approved' ? '—' : 'Head of Office',
+            attachments: []
+          };
+        });
+      }
+    }
+
+    if (woRes.ok) {
+      const list = await woRes.json();
+      if (list && list.length) {
+        DB.workorders = list.map(function(w, i){
+          return {
+            id: w.id || ('W' + (i+1)),
+            no: w.wo_no,
+            date: w.issue_date ? w.issue_date.slice(0,10) : TODAY,
+            tender: w.tender_no || 'TND/2026/10042',
+            reqs: 'MR/DIT/2026/000101',
+            vendor: w.vendor_name || VENDORS[0],
+            dept: DEPTS[0],
+            store: w.store_name || STORES[0],
+            subject: 'Supply order under GEM contract',
+            terms: w.payment_terms || '100% on receipt and acceptance',
+            deliveryDate: w.delivery_due_date ? w.delivery_due_date.slice(0,10) : addDays(TODAY, 45),
+            status: w.status || 'Issued',
+            value: Number(w.total_value || 0),
+            tax: Math.round(Number(w.total_value || 0) * 0.18),
+            total: Math.round(Number(w.total_value || 0) * 1.18),
+            lines: (w.items || []).map(function(l){
+              return {
+                mat: l.item_code,
+                desc: l.item_name,
+                qty: Number(l.ordered_qty || 1),
+                uom: l.uom || 'NOS',
+                rate: Number(l.unit_rate || 0),
+                taxPct: Number(l.tax_rate_pct || 18),
+                spec: ''
+              };
+            }),
+            pgRequired: true,
+            pgStatus: 'Submitted',
+            pgNo: 'BG/2026/0088',
+            pgExpiry: addDays(TODAY, 180),
+            dispatched: false,
+            amendments: [],
+            attachments: []
+          };
+        });
+      }
+    }
+
+    if (grnRes.ok) {
+      const list = await grnRes.json();
+      if (list && list.length) {
+        DB.grns = list.map(function(g, i){
+          return {
+            id: g.id || ('G' + (i+1)),
+            no: g.grn_no,
+            date: g.grn_date ? g.grn_date.slice(0,10) : TODAY,
+            wo: g.wo_no || 'WO/2026/00101',
+            vendor: g.vendor_name || VENDORS[0],
+            store: g.store_name || STORES[0],
+            challan: g.challan_no || 'CH-9012',
+            challanDate: g.challan_date ? g.challan_date.slice(0,10) : TODAY,
+            vehicle: g.vehicle_number || 'DL 1L AA 4012',
+            driver: g.driver_name || 'Driver',
+            lines: (g.items || []).map(function(l){
+              return {
+                mat: l.item_code,
+                desc: l.item_name,
+                ordered: Number(l.received_qty || 1),
+                challanQty: Number(l.received_qty || 1),
+                received: Number(l.received_qty || 1),
+                passed: Number(l.accepted_qty || l.received_qty || 1),
+                rejected: Number(l.rejected_qty || 0),
+                rate: 10000,
+                uom: 'NOS',
+                remarks: ''
+              };
+            }),
+            status: g.posting_status === 'Posted' ? 'Posted to Stock' : (g.insp_status || 'Under Inspection'),
+            inspReport: 'INSP/2026/' + pad(100+i, 4),
+            gateEntry: g.gate_entry_no || ('GE/2026/' + pad(200+i, 4)),
+            attachments: []
+          };
+        });
+      }
+    }
+
+    if (stockRes.ok) {
+      const list = await stockRes.json();
+      if (list && list.length) {
+        DB.stock = list.map(function(s, i){
+          return {
+            mat: s.item_code,
+            store: s.store_name,
+            batch: 'BATCH-2026-01',
+            expiry: '2028-03-31',
+            avail: Number(s.qty_on_hand || 0),
+            reserved: Number(s.qty_reserved || 0),
+            inTransit: Number(s.qty_in_transit || 0),
+            qcHold: Number(s.qty_qc_hold || 0),
+            rate: Number(s.unit_valuation_rate || 0),
+            value: Number(s.qty_on_hand || 0) * Number(s.unit_valuation_rate || 0)
+          };
+        });
+      }
+    }
+
+    if (movRes.ok) {
+      const list = await movRes.json();
+      if (list && list.length) {
+        DB.movements = list.map(function(m, i){
+          return {
+            id: m.id || ('MOV' + (i+1)),
+            date: m.entry_date ? m.entry_date.slice(0,10) : TODAY,
+            type: m.movement_type || 'Receipt from Vendor',
+            mat: m.item_code,
+            store: m.store_name || STORES[0],
+            qty: Number(m.qty || 0),
+            rate: Number(m.unit_rate || 0),
+            val: Number(m.total_value || 0),
+            ref: m.reference_doc_no || 'GRN/2026/0001',
+            bal: Number(m.closing_balance || 0),
+            by: 'Anil Katwale',
+            dst: DEPTS[0]
+          };
+        });
+      }
+    }
+
+    if (notifRes.ok) {
+      const list = await notifRes.json();
+      if (list && list.length) {
+        DB.notifications = list.map(function(n, i){
+          return {
+            id: n.id || ('N' + (i+1)),
+            kind: n.notif_type || 'in',
+            title: n.title,
+            body: n.body,
+            route: n.action_route || 'req/list',
+            time: n.created_at ? n.created_at.slice(0,10) : TODAY,
+            read: n.is_read
+          };
+        });
+      }
+    }
+
+    save();
+    refreshNavCounts();
+    paintNotifCount();
   } catch(err) {
     console.log('Backend sync offline/starting, using local database cache:', err);
   }
 }
-
 export function initIFMS(){
   DB = Store.get();
   if(!DB || !DB.materials || !DB.materials.length){ DB = seedDB(); save(); }
