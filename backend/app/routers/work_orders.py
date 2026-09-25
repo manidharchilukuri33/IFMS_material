@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from decimal import Decimal
 from datetime import date, datetime, timedelta
+import random
 from app.database import get_db
 from app.models.material_models import (
     MtrlWo, MtrlWoLine, MtrlWoAmend, MtrlDelivery, MtrlParty, MtrlStore, MtrlItem
