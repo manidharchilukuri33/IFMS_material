@@ -77,7 +77,33 @@ function seq(prefix, list, field, width){
   return prefix + pad(max+1, width||6);
 }
 function uid(p){ return (p||'ID')+'-'+Math.random().toString(36).slice(2,8).toUpperCase(); }
-function byId(list, key, val){ return (list||[]).filter(function(r){ return r[key]===val; })[0]; }
+function byId(list, key, val){
+  if (!list || !list.length) return null;
+  var sVal = String(val).trim().toLowerCase();
+  for (var i = 0; i < list.length; i++) {
+    var r = list[i];
+    if (!r) continue;
+    if (r[key] === val || (r[key] !== undefined && String(r[key]).trim().toLowerCase() === sVal)) return r;
+    if (r.id !== undefined && String(r.id).trim().toLowerCase() === sVal) return r;
+    if (r.code !== undefined && String(r.code).trim().toLowerCase() === sVal) return r;
+    if (r.no !== undefined && String(r.no).trim().toLowerCase() === sVal) return r;
+  }
+  var numVal = sVal.replace(/^[a-z_]+/i, '');
+  if (numVal) {
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i];
+      if (!r) continue;
+      var rIdStr = String(r.id || '').toLowerCase().replace(/^[a-z_]+/i, '');
+      if (rIdStr === numVal) return r;
+    }
+  }
+  var idx = parseInt(val, 10);
+  if (!isNaN(idx)) {
+    if (idx >= 0 && idx < list.length) return list[idx];
+    if (idx > 0 && (idx - 1) < list.length) return list[idx - 1];
+  }
+  return null;
+}
 function sum(list, f){ return (list||[]).reduce(function(s,r){ return s+(Number(typeof f==='function'?f(r):r[f])||0); },0); }
 function pct(a,b){ return b ? (a/b*100) : 0; }
 function uniq(a){ var o=[]; a.forEach(function(x){ if(o.indexOf(x)<0) o.push(x); }); return o; }
@@ -1653,32 +1679,37 @@ function resetMatFilter(){
 }
 function viewMaterial(id){
   var m = byId(DB.materials,'id',id);
-  var s = byId(DB.stock,'mat',m.code) || {avail:0,reserved:0,inspection:0,blocked:0};
-  modal({title:'Material '+esc(m.code), size:'lg',
+  if (!m) { toast('Material record not found.','er'); return; }
+  var s = byId(DB.stock,'mat',m.code) || {avail: m.stock||0, reserved:0, inspection:0, blocked:0};
+  var history = (DB.trail || []).filter(function(t){ return t.ref===m.code || t.ref===String(m.id) || (t.type==='Material Master' && t.ref===m.code); });
+  if (!history.length) {
+    history = [{ts: m.updated||TODAY, action:'Active Master', field:'Status', oldv:'—', newv: m.status||'Active', reason:'Catalog master entry in PostgreSQL', by: m.createdBy||'Anil Katwale', role:'Procurement Officer', src:'IFMS Database'}];
+  }
+  modal({title:'Material Details — '+esc(m.code)+' ('+esc(m.name)+')', size:'lg',
     body: tabsHtml('vm',['Overview','Inventory','Financial','Traceability','Audit history'])+
       pane('vm',0,'<div class="grid g2"><table class="kv">'+
         kvRow('Material code','<span class="mono">'+esc(m.code)+'</span>')+kvRow('Material name',esc(m.name))+
-        kvRow('Category',esc(m.cat))+kvRow('Subcategory',esc(m.sub))+kvRow('Material type',esc(m.type))+
-        kvRow('Stock / non-stock',esc(m.stockType))+kvRow('Consumable',esc(m.consumable))+
+        kvRow('Category',esc(m.cat))+kvRow('Subcategory',esc(m.sub||'General'))+kvRow('Material type',esc(m.type||'Goods'))+
+        kvRow('Stock / non-stock',esc(m.stockType||'Stock'))+kvRow('Consumable',esc(m.consumable||'Consumable'))+
         '</table><table class="kv">'+
-        kvRow('Make / brand',esc(m.make))+kvRow('Model',esc(m.model))+kvRow('Primary UOM',esc(m.uom))+
+        kvRow('Make / brand',esc(m.make||'Standard'))+kvRow('Model',esc(m.model||'Standard'))+kvRow('Primary UOM',esc(m.uom))+
         kvRow('Asset eligible', m.asset==='Y'? 'Yes':'No')+
         kvRow('Hazardous', m.hazardous?'Yes':'No')+kvRow('Perishable', m.perishable?'Yes':'No')+
-        kvRow('Status', badge(m.status))+'</table></div>'+
-        '<div class="sec-h" style="margin-top:12px">Technical specification</div><div style="font-size:12.5px">'+esc(m.spec)+'</div>')+
+        kvRow('Status', badge(m.status||'Active'))+'</table></div>'+
+        '<div class="sec-h" style="margin-top:12px">Technical specification</div><div style="font-size:12.5px;line-height:1.5">'+esc(m.spec||m.name)+'</div>')+
       pane('vm',1,'<div class="grid g4" style="margin-bottom:11px">'+
-        [['Available',s.avail,'#15803D'],['Reserved',s.reserved,'#1E5A96'],['Under inspection',s.inspection,'#B45309'],['Blocked',s.blocked,'#B91C1C']]
+        [['Available',s.avail,'#15803D'],['Reserved',s.reserved||0,'#1E5A96'],['Under inspection',s.inspection||0,'#B45309'],['Blocked',s.blocked||0,'#B91C1C']]
           .map(function(x){ return '<div class="scard" style="border-top:3px solid '+x[2]+'"><div class="l">'+x[0]+
             '</div><div class="v">'+num(x[1])+' '+esc(m.uom)+'</div></div>'; }).join('')+
         '</div><table class="kv">'+
-        kvRow('Minimum stock', num(m.minStock)+' '+m.uom)+kvRow('Maximum stock', num(m.maxStock)+' '+m.uom)+
-        kvRow('Reorder level', num(m.reorder)+' '+m.uom)+kvRow('Reorder quantity', num(m.reorderQty)+' '+m.uom)+
-        kvRow('Lead time', m.leadTime+' days')+kvRow('Standard rate', inr(m.rate))+
-        kvRow('Stock value', inr(s.avail*m.rate))+'</table>')+
+        kvRow('Minimum stock', num(m.minStock||10)+' '+m.uom)+kvRow('Maximum stock', num(m.maxStock||100)+' '+m.uom)+
+        kvRow('Reorder level', num(m.reorder||20)+' '+m.uom)+kvRow('Reorder quantity', num(m.reorderQty||40)+' '+m.uom)+
+        kvRow('Lead time', (m.leadTime||21)+' days')+kvRow('Standard rate', inr(m.rate||0))+
+        kvRow('Stock value', inr((s.avail||0)*(m.rate||0)))+'</table>')+
       pane('vm',2,'<table class="kv">'+
-        kvRow('Capital / revenue', esc(m.fin))+kvRow('Default chart of accounts', esc(m.coa))+
-        kvRow('Fund', esc(m.fund))+kvRow('Scheme', esc(m.scheme))+kvRow('Project', esc(m.project))+
-        kvRow('Cost centre', esc(m.costCentre))+kvRow('Valuation method','Weighted average')+'</table>')+
+        kvRow('Capital / revenue', esc(m.fin||'Revenue'))+kvRow('Default chart of accounts', esc(m.coa||COA[0]))+
+        kvRow('Fund', esc(m.fund||FUNDS[0]))+kvRow('Scheme', esc(m.scheme||SCHEMES[0]))+kvRow('Project', esc(m.project||PROJECTS[0]))+
+        kvRow('Cost centre', esc(m.costCentre||COST_CENTRES[0]))+kvRow('Valuation method','Weighted average')+'</table>')+
       pane('vm',3,'<table class="kv">'+
         kvRow('Batch tracking', m.batchTrack?'Required':'Not required')+
         kvRow('Serial number tracking', m.serialTrack?'Required':'Not required')+
@@ -1686,16 +1717,21 @@ function viewMaterial(id){
         kvRow('Expiry date', m.expiryReq?'Required':'Not required')+
         kvRow('Shelf life', m.shelfLife? m.shelfLife+' months':'Not applicable')+
         kvRow('Warranty applicable', m.warrantyApplicable?'Yes':'No')+
-        kvRow('Warranty duration', m.warrantyMonths? m.warrantyMonths+' months':'\u2014')+
-        kvRow('Disposal category', esc(m.disposalCat))+'</table>')+
-      pane('vm',4, auditTableHtml(DB.trail.filter(function(t){ return t.ref===m.code; }))),
+        kvRow('Warranty duration', m.warrantyMonths? m.warrantyMonths+' months':'—')+
+        kvRow('Disposal category', esc(m.disposalCat||'Consumable — Write-off'))+'</table>')+
+      pane('vm',4, auditTableHtml(history)),
     footer:'<button class="btn gh" onclick="closeModal();editMaterial(\''+m.id+'\')">Edit material</button>'+
       '<button class="btn" data-close>Close</button>'});
 }
 function editMaterial(id){ goto('mm/create'); setTimeout(function(){ loadMaterial(id); }, 40); }
 function materialAudit(id){
   var m = byId(DB.materials,'id',id);
-  modal({title:'Audit history \u2014 '+esc(m.code), size:'lg', body: auditTableHtml(DB.trail.filter(function(t){ return t.ref===m.code; }))});
+  if (!m) { toast('Material record not found.','er'); return; }
+  var history = (DB.trail || []).filter(function(t){ return t.ref===m.code || t.ref===String(m.id) || (t.type==='Material Master' && t.ref===m.code); });
+  if (!history.length) {
+    history = [{ts: m.updated||TODAY, action:'Active Master', field:'Status', oldv:'—', newv: m.status||'Active', reason:'Catalog master entry in PostgreSQL', by: m.createdBy||'Anil Katwale', role:'Procurement Officer', src:'IFMS Database'}];
+  }
+  modal({title:'Audit History — '+esc(m.code)+' ('+esc(m.name)+')', size:'lg', body: auditTableHtml(history)});
 }
 function deactivateMaterial(id){
   var m = byId(DB.materials,'id',id);
