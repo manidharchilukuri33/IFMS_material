@@ -4677,9 +4677,9 @@ SCREENS['inv/tools'] = function(){
     'Track checkouts, assignments, and returns for tools, capital assets, and portable devices',
     '<button class="btn sm pri" onclick="toolCheckoutEntry()">+ Issue Tool / Asset</button>',
     reqTags('MMP_07','MMP_14'))+
-  tableEngine({
+  '<div class="card"><div class="bd">'+renderTable({
     id:'tTools',
-    data: items,
+    rows: items,
     cols:[
       {h:'Issue Ref', k:'issue_ref', f:function(r){ return '<b>'+esc(r.issue_ref)+'</b>'; }},
       {h:'Tool / Asset', k:'tool_name', f:function(r){ return esc(r.tool_name)+'<div class="muted" style="font-size:10.5px">Tag: '+esc(r.asset_tag||'—')+'</div>'; }},
@@ -4693,8 +4693,9 @@ SCREENS['inv/tools'] = function(){
       {h:'Actions', k:'a', cls:'acts', srt:false, f:function(r){
         return (r.status==='Issued' || r.status==='Overdue') ? actIcon('Return / Checkin',"toolCheckinEntry('" + r.id + "')",'pri') : actIcon('Returned','','ok');
       }}
-    ]
-  });
+    ],
+    empty:'No tool or asset issuance recorded'
+  })+'</div></div>';
 };
 
 function toolCheckoutEntry(){
@@ -8849,714 +8850,438 @@ export function initIFMS(){
 
 // Attach all top-level UI and action functions to window for global inline event handlers
 if (typeof window !== 'undefined') {
-  var globalExports = {
-    ACTION_ACL: ACTION_ACL,
-    ACTION_LABEL: ACTION_LABEL,
-    ALL_ROLES: ALL_ROLES,
-    ATT_NAMES: ATT_NAMES,
-    BADGE: BADGE,
-    CHECK_PROCESSES: CHECK_PROCESSES,
-    CHECK_RULES: CHECK_RULES,
-    COST_CENTRES: COST_CENTRES,
-    DEFCAT: DEFCAT,
-    EDIT_MAT: EDIT_MAT,
-    FUNDS: FUNDS,
-    GAP_ROWS: GAP_ROWS,
-    HIER: HIER,
-    KEY_LABEL: KEY_LABEL,
-    L: L,
-    MODES: MODES,
-    MTYPES: MTYPES,
-    P: P,
-    PARAM_DEFS: PARAM_DEFS,
-    PROJECTS: PROJECTS,
-    REQ_CHECK: REQ_CHECK,
-    REQ_LINES: REQ_LINES,
-    REQ_STATUS: REQ_STATUS,
-    ROUTE_ACL: ROUTE_ACL,
-    RTM_CROSS: RTM_CROSS,
-    RTM_ROWS: RTM_ROWS,
-    RTM_SKIP: RTM_SKIP,
-    SCHEMES: SCHEMES,
-    SEC_TAB: SEC_TAB,
-    TBL: TBL,
-    TF: TF,
-    WF_ACTIONS: WF_ACTIONS,
-    WO_LINES: WO_LINES,
-    a0: a0,
-    a1: a1,
-    acc: acc,
-    act: act,
-    actIcon: actIcon,
-    actionAllowed: actionAllowed,
-    add: add,
-    addAttach: addAttach,
-    addDays: addDays,
-    addReqLine: addReqLine,
-    addWoLine: addWoLine,
-    adjEnsureWf: adjEnsureWf,
-    adjs: adjs,
-    age: age,
-    ageCnt: ageCnt,
-    ageRows: ageRows,
-    allReqs: allReqs,
-    allSubs: allSubs,
-    already: already,
-    alt: alt,
-    am: am,
-    amendWo: amendWo,
-    amt: amt,
-    applyDefFilter: applyDefFilter,
-    applyDspFilter: applyDspFilter,
-    applyGrnFilter: applyGrnFilter,
-    applyGuards: applyGuards,
-    applyInvFilter: applyInvFilter,
-    applyMatFilter: applyMatFilter,
-    applyMovFilter: applyMovFilter,
-    applyReqFilter: applyReqFilter,
-    applyStockFilter: applyStockFilter,
-    applyTrailFilter: applyTrailFilter,
-    applyWarrFilter: applyWarrFilter,
-    applyWoFilter: applyWoFilter,
-    approveAdjustment: approveAdjustment,
-    approveAdjustmentFinal: approveAdjustmentFinal,
-    approveDisposal: approveDisposal,
-    approveDisposalFinal: approveDisposalFinal,
-    approvePlan: approvePlan,
-    approveReq: approveReq,
-    approveWo: approveWo,
-    ar: ar,
-    assets: assets,
-    attChip: attChip,
-    attList: attList,
-    attachWidget: attachWidget,
-    auditEntry: auditEntry,
-    auditTableHtml: auditTableHtml,
-    audits: audits,
-    augmentDB: augmentDB,
-    auto: auto,
-    autoCode: autoCode,
-    autoL1: autoL1,
-    autoSuggestBoq: autoSuggestBoq,
-    av: av,
-    avail: avail,
-    avg: avg,
-    awarded: awarded,
-    bad: bad,
-    badge: badge,
-    bal: bal,
-    barChart: barChart,
-    bases: bases,
-    basic: basic,
-    bcls: bcls,
-    bhAvail: bhAvail,
-    bhPos: bhPos,
-    bids: bids,
-    bk: bk,
-    blkVal: blkVal,
-    blob: blob,
-    body: body,
-    book: book,
-    bookCommitment: bookCommitment,
-    boot: boot,
-    boq: boq,
-    boqHistory: boqHistory,
-    boqSuggestions: boqSuggestions,
-    box: box,
-    boxes: boxes,
-    budget: budget,
-    budgetCheckReq: budgetCheckReq,
-    buildSidebar: buildSidebar,
-    bulkApprove: bulkApprove,
-    bulkSendFinance: bulkSendFinance,
-    burn: burn,
-    byDept: byDept,
-    byId: byId,
-    byMat: byMat,
-    byMode: byMode,
-    byVendor: byVendor,
-    c0: c0,
-    cancelWo: cancelWo,
-    catRows: catRows,
-    ch: ch,
-    chain: chain,
-    changes: changes,
-    checkStock: checkStock,
-    checkStockDraft: checkStockDraft,
-    checklistAutoPass: checklistAutoPass,
-    checklistEntry: checklistEntry,
-    checklistEval: checklistEval,
-    checklistGate: checklistGate,
-    closeAllModals: closeAllModals,
-    closeAudit: closeAudit,
-    closeDD: closeDD,
-    closeModal: closeModal,
-    cls: cls,
-    cnt: cnt,
-    coa: coa,
-    code: code,
-    col: col,
-    colChart: colChart,
-    cols: cols,
-    commit: commit,
-    commitBulk: commitBulk,
-    commitmentOf: commitmentOf,
-    common: common,
-    completeDisposal: completeDisposal,
-    cond: cond,
-    condemnReturn: condemnReturn,
-    confirmAct: confirmAct,
-    confirmIssue: confirmIssue,
-    covered: covered,
-    createConsolidatedPlan: createConsolidatedPlan,
-    csAudit: csAudit,
-    cur: cur,
-    curDept: curDept,
-    curRole: curRole,
-    curUser: curUser,
-    cust: cust,
-    cutoffLabel: cutoffLabel,
-    cycle: cycle,
-    dashCounts: dashCounts,
-    days: days,
-    daysBetween: daysBetween,
-    deactivateMaterial: deactivateMaterial,
-    defs: defs,
-    delRows: delRows,
-    delayAlert: delayAlert,
-    dels: dels,
-    denyAction: denyAction,
-    despatchTransfer: despatchTransfer,
-    dest: dest,
-    dfSla: dfSla,
-    disp: disp,
-    dispVal: dispVal,
-    disposalEntry: disposalEntry,
-    done: done,
-    donut: donut,
-    download: download,
-    downloadCs: downloadCs,
-    downloadTemplate: downloadTemplate,
-    dp: dp,
-    dpCalc: dpCalc,
-    dspEnsureWf: dspEnsureWf,
-    dst: dst,
-    dup: dup,
-    editMaterial: editMaterial,
-    el: el,
-    eligible: eligible,
-    emds: emds,
-    esc: esc,
-    esc0: esc0,
-    escalateDefect: escalateDefect,
-    ex: ex,
-    exc: exc,
-    exists: exists,
-    exp: exp,
-    expOk: expOk,
-    expSoon: expSoon,
-    expVal: expVal,
-    expected: expected,
-    expired: expired,
-    expiryCell: expiryCell,
-    explainRoute: explainRoute,
-    exportCsv: exportCsv,
-    extendPg: extendPg,
-    extra: extra,
-    failA: failA,
-    failM: failM,
-    fc: fc,
-    fdate: fdate,
-    fdatetime: fdatetime,
-    fees: fees,
-    filterAgeing: filterAgeing,
-    filterBar: filterBar,
-    fin: fin,
-    finishEval: finishEval,
-    first: first,
-    fixed: fixed,
-    fld: fld,
-    fmtLimit: fmtLimit,
-    fn: fn,
-    fns: fns,
-    forecastToRequisition: forecastToRequisition,
-    form: form,
-    fq: fq,
-    frIds: frIds,
-    from: from,
-    fyElapsedPct: fyElapsedPct,
-    fyQuarter: fyQuarter,
-    globalSearch: globalSearch,
-    go: go,
-    got: got,
-    goto: goto,
-    grnCalc: grnCalc,
-    grnEntry: grnEntry,
-    grnFromDelivery: grnFromDelivery,
-    grnQty: grnQty,
-    grnWoInfo: grnWoInfo,
-    grns: grns,
-    gst: gst,
-    hbar: hbar,
-    head: head,
-    hit: hit,
-    hits: hits,
-    host: host,
-    icons: icons,
-    id: id,
-    idx: idx,
-    inC: inC,
-    inCutoff: inCutoff,
-    inTypes: inTypes,
-    initiateProc: initiateProc,
-    inr: inr,
-    inr0: inr0,
-    ins: ins,
-    insp: insp,
-    inspCalc: inspCalc,
-    inspVal: inspVal,
-    inspectGrn: inspectGrn,
-    inspectionReport: inspectionReport,
-    inv: inv,
-    invQty: invQty,
-    invoiceEntry: invoiceEntry,
-    invs: invs,
-    isIn: isIn,
-    isRO: isRO,
-    isStock: isStock,
-    issRows: issRows,
-    issueEntry: issueEntry,
-    issueWo: issueWo,
-    issues: issues,
-    items: items,
-    ivCalc: ivCalc,
-    ivFromGrn: ivFromGrn,
-    ix0: ix0,
-    ix1: ix1,
-    j: j,
-    kOutstanding: kOutstanding,
-    keys: keys,
-    kpiTile: kpiTile,
-    ks: ks,
-    kvRow: kvRow,
-    l: l,
-    l3: l3,
-    lab: lab,
-    label: label,
-    labelOf: labelOf,
-    large: large,
-    last: last,
-    lastRow: lastRow,
-    late: late,
-    ld: ld,
-    ldCompute: ldCompute,
-    lim: lim,
-    limits: limits,
-    lines: lines,
-    liq: liq,
-    liquidateCommitment: liquidateCommitment,
-    list: list,
-    loadMaterial: loadMaterial,
-    lockedDialog: lockedDialog,
-    logAudit: logAudit,
-    logoutSim: logoutSim,
-    ls: ls,
-    lvl: lvl,
-    map: map,
-    mapBoq: mapBoq,
-    markAllRead: markAllRead,
-    markErr: markErr,
-    markNonStd: markNonStd,
-    markRead: markRead,
-    matObj: matObj,
-    matchDetail: matchDetail,
-    matchPanel: matchPanel,
-    matchResult: matchResult,
-    materialAudit: materialAudit,
-    mats: mats,
-    max: max,
-    mcode: mcode,
-    md: md,
-    mine: mine,
-    missing: missing,
-    mm: mm,
-    mname: mname,
-    mnm: mnm,
-    modal: modal,
-    modalStack: modalStack,
-    modeCount: modeCount,
-    modeKey: modeKey,
-    modeRows: modeRows,
-    mods: mods,
-    movIn: movIn,
-    movOut: movOut,
-    movs: movs,
-    mrate: mrate,
-    mreorder: mreorder,
-    msgs: msgs,
-    muom: muom,
-    myPending: myPending,
-    name: name,
-    navCount: navCount,
-    need: need,
-    needReason: needReason,
-    neg: neg,
-    net: net,
-    newFromBoq: newFromBoq,
-    newId: newId,
-    newSerial: newSerial,
-    next: next,
-    no: no,
-    note: note,
-    notes: notes,
-    notifMenu: notifMenu,
-    notify: notify,
-    nowIso: nowIso,
-    num: num,
-    nv: nv,
-    nval: nval,
-    nx: nx,
-    od: od,
-    ok: ok,
-    old: old,
-    oldT: oldT,
-    onTime: onTime,
-    open: open,
-    openDD: openDD,
-    openDefects: openDefects,
-    openDefs: openDefs,
-    openPo: openPo,
-    opts: opts,
-    orderQty: orderQty,
-    orderRate: orderRate,
-    ordered: ordered,
-    orig: orig,
-    other: other,
-    otherStoreQty: otherStoreQty,
-    out: out,
-    ovl: ovl,
-    pad: pad,
-    pageHead: pageHead,
-    pages: pages,
-    paid: paid,
-    paintChain: paintChain,
-    paintCs: paintCs,
-    paintEval: paintEval,
-    paintNotifCount: paintNotifCount,
-    paintReqLines: paintReqLines,
-    paintUser: paintUser,
-    paintWoLines: paintWoLines,
-    pane: pane,
-    parts: parts,
-    passed: passed,
-    pct: pct,
-    pend: pend,
-    pendRcpt: pendRcpt,
-    pending: pending,
-    pendingReqs: pendingReqs,
-    pgs: pgs,
-    phys: phys,
-    pipeline: pipeline,
-    planToTender: planToTender,
-    portals: portals,
-    postGrn: postGrn,
-    postGrnCore: postGrnCore,
-    postVariances: postVariances,
-    pre: pre,
-    priBadge: priBadge,
-    printWo: printWo,
-    proj: proj,
-    push: push,
-    q1: q1,
-    qeCalc: qeCalc,
-    qty: qty,
-    quoteEntry: quoteEntry,
-    quotes: quotes,
-    raiseDefect: raiseDefect,
-    raiseDelayAlerts: raiseDelayAlerts,
-    rank: rank,
-    rate: rate,
-    raw: raw,
-    rdt: rdt,
-    reactivateMaterial: reactivateMaterial,
-    reason: reason,
-    rec: rec,
-    recalcForecast: recalcForecast,
-    recd: recd,
-    receiveTransfer: receiveTransfer,
-    recommendRetender: recommendRetender,
-    reconcilePortal: reconcilePortal,
-    recordDispatch: recordDispatch,
-    recordNegotiation: recordNegotiation,
-    recordPayment: recordPayment,
-    recordReplacement: recordReplacement,
-    refreshNavCounts: refreshNavCounts,
-    refundRtv: refundRtv,
-    rej: rej,
-    rejQty: rejQty,
-    rejectAdjustment: rejectAdjustment,
-    rejectAdjustmentCore: rejectAdjustmentCore,
-    rejectDisposal: rejectDisposal,
-    rejectDisposalCore: rejectDisposalCore,
-    rejectReq: rejectReq,
-    releaseCommitment: releaseCommitment,
-    releasePg: releasePg,
-    renderTable: renderTable,
-    reorderToRequisition: reorderToRequisition,
-    repaintReqTables: repaintReqTables,
-    replaceRtv: replaceRtv,
-    reqEnsureWf: reqEnsureWf,
-    reqRegister: reqRegister,
-    reqStat: reqStat,
-    reqTags: reqTags,
-    reqTotal: reqTotal,
-    reqs: reqs,
-    requireOk: requireOk,
-    res: res,
-    resVal: resVal,
-    resetDefFilter: resetDefFilter,
-    resetDemo: resetDemo,
-    resetDspFilter: resetDspFilter,
-    resetGrnFilter: resetGrnFilter,
-    resetInvFilter: resetInvFilter,
-    resetMatFilter: resetMatFilter,
-    resetMovFilter: resetMovFilter,
-    resetReqFilter: resetReqFilter,
-    resetStockFilter: resetStockFilter,
-    resetTrailFilter: resetTrailFilter,
-    resetWarrFilter: resetWarrFilter,
-    resetWoFilter: resetWoFilter,
-    resolveDefect: resolveDefect,
-    resolveException: resolveException,
-    restockReturn: restockReturn,
-    restocked: restocked,
-    ret: ret,
-    returnEntry: returnEntry,
-    returnWo: returnWo,
-    returns: returns,
-    rid: rid,
-    rl: rl,
-    rmLine: rmLine,
-    rmWoLine: rmWoLine,
-    ro: ro,
-    roBanner: roBanner,
-    role: role,
-    roleDef: roleDef,
-    roleLimit: roleLimit,
-    roleStrip: roleStrip,
-    roles: roles,
-    root: root,
-    routeAllowed: routeAllowed,
-    routeRoles: routeRoles,
-    rows: rows,
-    rtFromIssue: rtFromIssue,
-    rtmBuild: rtmBuild,
-    rtmExport: rtmExport,
-    rtv: rtv,
-    rtvFromGrn: rtvFromGrn,
-    rules: rules,
-    runAllMatches: runAllMatches,
-    runEscalation: runEscalation,
-    runEscalationNow: runEscalationNow,
-    runMatch: runMatch,
-    same: same,
-    save: save,
-    saveAmendment: saveAmendment,
-    saveAudit: saveAudit,
-    saveBoqMap: saveBoqMap,
-    saveChecklistItem: saveChecklistItem,
-    saveDefect: saveDefect,
-    saveDefectUpdate: saveDefectUpdate,
-    saveDispatch: saveDispatch,
-    saveDisposal: saveDisposal,
-    saveDisposalCompletion: saveDisposalCompletion,
-    saveEval: saveEval,
-    saveExtendPg: saveExtendPg,
-    saveGrn: saveGrn,
-    saveInspection: saveInspection,
-    saveInvoice: saveInvoice,
-    saveIssue: saveIssue,
-    saveMaterial: saveMaterial,
-    saveNegotiation: saveNegotiation,
-    saveParams: saveParams,
-    saveQuote: saveQuote,
-    saveReq: saveReq,
-    saveReqCore: saveReqCore,
-    saveResolution: saveResolution,
-    saveReturn: saveReturn,
-    saveToolCheckin: saveToolCheckin,
-    saveToolCheckout: saveToolCheckout,
-    saveTransfer: saveTransfer,
-    saveWo: saveWo,
-    saveWorkflow: saveWorkflow,
-    score: score,
-    securitiesScreen: securitiesScreen,
-    securityAct: securityAct,
-    securityAudit: securityAudit,
-    seedBudgetHeads: seedBudgetHeads,
-    seedChecklists: seedChecklists,
-    seedDB: seedDB,
-    seedInterfaces: seedInterfaces,
-    seedMaterials: seedMaterials,
-    seedParams: seedParams,
-    seedStockOther: seedStockOther,
-    sel: sel,
-    selectVendor: selectVendor,
-    sendBackReq: sendBackReq,
-    sendToFinance: sendToFinance,
-    seq: seq,
-    set: set,
-    setJustification: setJustification,
-    setLine: setLine,
-    setOverride: setOverride,
-    setPhys: setPhys,
-    setPvReason: setPvReason,
-    setVal: setVal,
-    setWoLine: setWoLine,
-    sev: sev,
-    short: short,
-    showProfile: showProfile,
-    showWoWf: showWoWf,
-    simulateBulk: simulateBulk,
-    simulateSync: simulateSync,
-    skip: skip,
-    slaBadge: slaBadge,
-    slaCell: slaCell,
-    slaFor: slaFor,
-    slaItems: slaItems,
-    splitAward: splitAward,
-    src: src,
-    st: st,
-    stampChecklist: stampChecklist,
-    state: state,
-    stk: stk,
-    stock: stock,
-    stockAgeClass: stockAgeClass,
-    stockLedger: stockLedger,
-    stockPanel: stockPanel,
-    stockState: stockState,
-    stockVal: stockVal,
-    sub: sub,
-    submitCs: submitCs,
-    submitWo: submitWo,
-    sug: sug,
-    sum: sum,
-    summaryRow: summaryRow,
-    switchRole: switchRole,
-    switchTab: switchTab,
-    syncSub: syncSub,
-    syncWithBackend: syncWithBackend,
-    tableHtml: tableHtml,
-    tabsHtml: tabsHtml,
-    tax: tax,
-    tblExport: tblExport,
-    tblPage: tblPage,
-    tblPaint: tblPaint,
-    tblReload: tblReload,
-    tblRows: tblRows,
-    tblSearch: tblSearch,
-    tblSelAll: tblSelAll,
-    tblSelOne: tblSelOne,
-    tblSize: tblSize,
-    tblSort: tblSort,
-    tds: tds,
-    tenders: tenders,
-    testRule: testRule,
-    tn: tn,
-    toCsv: toCsv,
-    toast: toast,
-    toggleChecklistItem: toggleChecklistItem,
-    toggleGrp: toggleGrp,
-    toggleRole: toggleRole,
-    toggleRule: toggleRule,
-    toggleWorkflow: toggleWorkflow,
-    tool: tool,
-    toolCheckinEntry: toolCheckinEntry,
-    toolCheckoutEntry: toolCheckoutEntry,
-    tot: tot,
-    totVal: totVal,
-    total: total,
-    trStock: trStock,
-    trail: trail,
-    transferEntry: transferEntry,
-    transfers: transfers,
-    type: type,
-    types: types,
-    uid: uid,
-    uniq: uniq,
-    updateDefect: updateDefect,
-    url: url,
-    usable: usable,
-    used: used,
-    userMenu: userMenu,
-    vObj: vObj,
-    vTop: vTop,
-    va: va,
-    val: val,
-    val0: val0,
-    validate: validate,
-    value: value,
-    verif: verif,
-    view: view,
-    viewDefect: viewDefect,
-    viewDisposal: viewDisposal,
-    viewGrn: viewGrn,
-    viewInstrument: viewInstrument,
-    viewInvoice: viewInvoice,
-    viewMaterial: viewMaterial,
-    viewQuote: viewQuote,
-    viewReq: viewReq,
-    viewTender: viewTender,
-    viewWo: viewWo,
-    vname: vname,
-    vrows: vrows,
-    w: w,
-    warr: warr,
-    warrState: warrState,
-    warrantyHistory: warrantyHistory,
-    wf: wf,
-    wf8: wf8,
-    wfAdvance: wfAdvance,
-    wfBuild: wfBuild,
-    wfCanAct: wfCanAct,
-    wfEnd: wfEnd,
-    wfFinalRole: wfFinalRole,
-    wfGate: wfGate,
-    wfPanel: wfPanel,
-    wfPreviewHtml: wfPreviewHtml,
-    wfPush: wfPush,
-    wfPushSeed: wfPushSeed,
-    wfStage: wfStage,
-    withoutReason: withoutReason,
-    wo: wo,
-    woBudgetCheck: woBudgetCheck,
-    woCalc: woCalc,
-    woChain: woChain,
-    woEnsureWf: woEnsureWf,
-    woFromBid: woFromBid,
-    woFromReq: woFromReq,
-    woIssueCheck: woIssueCheck,
-    woPullReqLines: woPullReqLines,
-    woTaxFactor: woTaxFactor,
-    woTotals: woTotals,
-    woVendorInfo: woVendorInfo,
-    workflowEntry: workflowEntry,
-    workflows: workflows,
-    wos: wos,
-    x: x,
-    x0: x0,
-    x1: x1
-  };
-
-  for (var key in globalExports) {
-    window[key] = globalExports[key];
-  }
-  try { window.DB = DB; } catch(e) {}
-  try { window.Store = Store; } catch(e) {}
-  try { window.SCREENS = SCREENS; } catch(e) {}
-  try { window.ROUTE = ROUTE; } catch(e) {}
-  try { window.CUR = CUR; } catch(e) {}
-  try { window.ROLE_DEFS = ROLE_DEFS; } catch(e) {}
-  try { window.switchRole = switchRole; } catch(e) {}
-  try { window.goto = goto; } catch(e) {}
+    try { window.ACTION_ACL = ACTION_ACL; } catch(e) {}
+    try { window.ACTION_LABEL = ACTION_LABEL; } catch(e) {}
+    try { window.ALL_ROLES = ALL_ROLES; } catch(e) {}
+    try { window.API_BASE = API_BASE; } catch(e) {}
+    try { window.ATT_NAMES = ATT_NAMES; } catch(e) {}
+    try { window.BADGE = BADGE; } catch(e) {}
+    try { window.CATS = CATS; } catch(e) {}
+    try { window.CHECK_PROCESSES = CHECK_PROCESSES; } catch(e) {}
+    try { window.CHECK_RULES = CHECK_RULES; } catch(e) {}
+    try { window.COA = COA; } catch(e) {}
+    try { window.COST_CENTRES = COST_CENTRES; } catch(e) {}
+    try { window.CUR = CUR; } catch(e) {}
+    try { window.DB = DB; } catch(e) {}
+    try { window.DEPTS = DEPTS; } catch(e) {}
+    try { window.EDIT_MAT = EDIT_MAT; } catch(e) {}
+    try { window.FUNDS = FUNDS; } catch(e) {}
+    try { window.GAP_ROWS = GAP_ROWS; } catch(e) {}
+    try { window.HIER = HIER; } catch(e) {}
+    try { window.KEY = KEY; } catch(e) {}
+    try { window.KEY_LABEL = KEY_LABEL; } catch(e) {}
+    try { window.MODES = MODES; } catch(e) {}
+    try { window.MON = MON; } catch(e) {}
+    try { window.NAV = NAV; } catch(e) {}
+    try { window.P = P; } catch(e) {}
+    try { window.PARAM_DEFS = PARAM_DEFS; } catch(e) {}
+    try { window.PROJECTS = PROJECTS; } catch(e) {}
+    try { window.R = R; } catch(e) {}
+    try { window.REQ_CHECK = REQ_CHECK; } catch(e) {}
+    try { window.REQ_LINES = REQ_LINES; } catch(e) {}
+    try { window.REQ_PENDING = REQ_PENDING; } catch(e) {}
+    try { window.REQ_STATUS = REQ_STATUS; } catch(e) {}
+    try { window.ROLE_DEFS = ROLE_DEFS; } catch(e) {}
+    try { window.ROUTE = ROUTE; } catch(e) {}
+    try { window.ROUTE_ACL = ROUTE_ACL; } catch(e) {}
+    try { window.RTM_CROSS = RTM_CROSS; } catch(e) {}
+    try { window.RTM_ROWS = RTM_ROWS; } catch(e) {}
+    try { window.RTM_SKIP = RTM_SKIP; } catch(e) {}
+    try { window.SCHEMES = SCHEMES; } catch(e) {}
+    try { window.SCREENS = SCREENS; } catch(e) {}
+    try { window.SCREENS_AFTER = SCREENS_AFTER; } catch(e) {}
+    try { window.SEC_TAB = SEC_TAB; } catch(e) {}
+    try { window.STORES = STORES; } catch(e) {}
+    try { window.Store = Store; } catch(e) {}
+    try { window.TBL = TBL; } catch(e) {}
+    try { window.TITLES = TITLES; } catch(e) {}
+    try { window.TODAY = TODAY; } catch(e) {}
+    try { window.UOMS = UOMS; } catch(e) {}
+    try { window.VENDORS = VENDORS; } catch(e) {}
+    try { window.WF_ACTIONS = WF_ACTIONS; } catch(e) {}
+    try { window.WO_LINES = WO_LINES; } catch(e) {}
+    try { window.actIcon = actIcon; } catch(e) {}
+    try { window.actionAllowed = actionAllowed; } catch(e) {}
+    try { window.addAttach = addAttach; } catch(e) {}
+    try { window.addDays = addDays; } catch(e) {}
+    try { window.addReqLine = addReqLine; } catch(e) {}
+    try { window.addWoLine = addWoLine; } catch(e) {}
+    try { window.adjEnsureWf = adjEnsureWf; } catch(e) {}
+    try { window.allSubs = allSubs; } catch(e) {}
+    try { window.amendWo = amendWo; } catch(e) {}
+    try { window.applyDefFilter = applyDefFilter; } catch(e) {}
+    try { window.applyDspFilter = applyDspFilter; } catch(e) {}
+    try { window.applyGrnFilter = applyGrnFilter; } catch(e) {}
+    try { window.applyGuards = applyGuards; } catch(e) {}
+    try { window.applyInvFilter = applyInvFilter; } catch(e) {}
+    try { window.applyMatFilter = applyMatFilter; } catch(e) {}
+    try { window.applyMovFilter = applyMovFilter; } catch(e) {}
+    try { window.applyReqFilter = applyReqFilter; } catch(e) {}
+    try { window.applyStockFilter = applyStockFilter; } catch(e) {}
+    try { window.applyTrailFilter = applyTrailFilter; } catch(e) {}
+    try { window.applyWarrFilter = applyWarrFilter; } catch(e) {}
+    try { window.applyWoFilter = applyWoFilter; } catch(e) {}
+    try { window.approveAdjustment = approveAdjustment; } catch(e) {}
+    try { window.approveAdjustmentFinal = approveAdjustmentFinal; } catch(e) {}
+    try { window.approveDisposal = approveDisposal; } catch(e) {}
+    try { window.approveDisposalFinal = approveDisposalFinal; } catch(e) {}
+    try { window.approvePlan = approvePlan; } catch(e) {}
+    try { window.approveReq = approveReq; } catch(e) {}
+    try { window.approveWo = approveWo; } catch(e) {}
+    try { window.attChip = attChip; } catch(e) {}
+    try { window.attList = attList; } catch(e) {}
+    try { window.attachWidget = attachWidget; } catch(e) {}
+    try { window.auditEntry = auditEntry; } catch(e) {}
+    try { window.auditTableHtml = auditTableHtml; } catch(e) {}
+    try { window.augmentDB = augmentDB; } catch(e) {}
+    try { window.autoCode = autoCode; } catch(e) {}
+    try { window.autoL1 = autoL1; } catch(e) {}
+    try { window.autoSuggestBoq = autoSuggestBoq; } catch(e) {}
+    try { window.badge = badge; } catch(e) {}
+    try { window.barChart = barChart; } catch(e) {}
+    try { window.bcls = bcls; } catch(e) {}
+    try { window.bhAvail = bhAvail; } catch(e) {}
+    try { window.bhPos = bhPos; } catch(e) {}
+    try { window.bookCommitment = bookCommitment; } catch(e) {}
+    try { window.boot = boot; } catch(e) {}
+    try { window.boqHistory = boqHistory; } catch(e) {}
+    try { window.boqSuggestions = boqSuggestions; } catch(e) {}
+    try { window.budgetCheckReq = budgetCheckReq; } catch(e) {}
+    try { window.buildSidebar = buildSidebar; } catch(e) {}
+    try { window.bulkApprove = bulkApprove; } catch(e) {}
+    try { window.bulkSendFinance = bulkSendFinance; } catch(e) {}
+    try { window.byId = byId; } catch(e) {}
+    try { window.cancelWo = cancelWo; } catch(e) {}
+    try { window.checkStock = checkStock; } catch(e) {}
+    try { window.checkStockDraft = checkStockDraft; } catch(e) {}
+    try { window.checklistAutoPass = checklistAutoPass; } catch(e) {}
+    try { window.checklistEntry = checklistEntry; } catch(e) {}
+    try { window.checklistEval = checklistEval; } catch(e) {}
+    try { window.checklistGate = checklistGate; } catch(e) {}
+    try { window.closeAllModals = closeAllModals; } catch(e) {}
+    try { window.closeAudit = closeAudit; } catch(e) {}
+    try { window.closeDD = closeDD; } catch(e) {}
+    try { window.closeModal = closeModal; } catch(e) {}
+    try { window.colChart = colChart; } catch(e) {}
+    try { window.commit = commit; } catch(e) {}
+    try { window.commitBulk = commitBulk; } catch(e) {}
+    try { window.commitmentOf = commitmentOf; } catch(e) {}
+    try { window.completeDisposal = completeDisposal; } catch(e) {}
+    try { window.condemnReturn = condemnReturn; } catch(e) {}
+    try { window.confirmAct = confirmAct; } catch(e) {}
+    try { window.confirmIssue = confirmIssue; } catch(e) {}
+    try { window.createConsolidatedPlan = createConsolidatedPlan; } catch(e) {}
+    try { window.csAudit = csAudit; } catch(e) {}
+    try { window.curDept = curDept; } catch(e) {}
+    try { window.curRole = curRole; } catch(e) {}
+    try { window.curUser = curUser; } catch(e) {}
+    try { window.cutoffLabel = cutoffLabel; } catch(e) {}
+    try { window.dashCounts = dashCounts; } catch(e) {}
+    try { window.daysBetween = daysBetween; } catch(e) {}
+    try { window.deactivateMaterial = deactivateMaterial; } catch(e) {}
+    try { window.delayAlert = delayAlert; } catch(e) {}
+    try { window.denyAction = denyAction; } catch(e) {}
+    try { window.despatchTransfer = despatchTransfer; } catch(e) {}
+    try { window.dfSla = dfSla; } catch(e) {}
+    try { window.disposalEntry = disposalEntry; } catch(e) {}
+    try { window.donut = donut; } catch(e) {}
+    try { window.download = download; } catch(e) {}
+    try { window.downloadCs = downloadCs; } catch(e) {}
+    try { window.downloadTemplate = downloadTemplate; } catch(e) {}
+    try { window.dpCalc = dpCalc; } catch(e) {}
+    try { window.dspEnsureWf = dspEnsureWf; } catch(e) {}
+    try { window.editMaterial = editMaterial; } catch(e) {}
+    try { window.esc = esc; } catch(e) {}
+    try { window.escalateDefect = escalateDefect; } catch(e) {}
+    try { window.expiryCell = expiryCell; } catch(e) {}
+    try { window.explainRoute = explainRoute; } catch(e) {}
+    try { window.exportCsv = exportCsv; } catch(e) {}
+    try { window.extendPg = extendPg; } catch(e) {}
+    try { window.fdate = fdate; } catch(e) {}
+    try { window.fdatetime = fdatetime; } catch(e) {}
+    try { window.filterAgeing = filterAgeing; } catch(e) {}
+    try { window.filterBar = filterBar; } catch(e) {}
+    try { window.finishEval = finishEval; } catch(e) {}
+    try { window.fld = fld; } catch(e) {}
+    try { window.fmtLimit = fmtLimit; } catch(e) {}
+    try { window.forecastToRequisition = forecastToRequisition; } catch(e) {}
+    try { window.frIds = frIds; } catch(e) {}
+    try { window.fyElapsedPct = fyElapsedPct; } catch(e) {}
+    try { window.fyQuarter = fyQuarter; } catch(e) {}
+    try { window.globalSearch = globalSearch; } catch(e) {}
+    try { window.goto = goto; } catch(e) {}
+    try { window.grnCalc = grnCalc; } catch(e) {}
+    try { window.grnEntry = grnEntry; } catch(e) {}
+    try { window.grnFromDelivery = grnFromDelivery; } catch(e) {}
+    try { window.grnWoInfo = grnWoInfo; } catch(e) {}
+    try { window.hbar = hbar; } catch(e) {}
+    try { window.inCutoff = inCutoff; } catch(e) {}
+    try { window.initiateProc = initiateProc; } catch(e) {}
+    try { window.inr = inr; } catch(e) {}
+    try { window.inr0 = inr0; } catch(e) {}
+    try { window.inspCalc = inspCalc; } catch(e) {}
+    try { window.inspectGrn = inspectGrn; } catch(e) {}
+    try { window.inspectionReport = inspectionReport; } catch(e) {}
+    try { window.invoiceEntry = invoiceEntry; } catch(e) {}
+    try { window.isRO = isRO; } catch(e) {}
+    try { window.isStock = isStock; } catch(e) {}
+    try { window.issueEntry = issueEntry; } catch(e) {}
+    try { window.issueWo = issueWo; } catch(e) {}
+    try { window.ivCalc = ivCalc; } catch(e) {}
+    try { window.ivFromGrn = ivFromGrn; } catch(e) {}
+    try { window.kOutstanding = kOutstanding; } catch(e) {}
+    try { window.kpiTile = kpiTile; } catch(e) {}
+    try { window.kvRow = kvRow; } catch(e) {}
+    try { window.ldCompute = ldCompute; } catch(e) {}
+    try { window.liquidateCommitment = liquidateCommitment; } catch(e) {}
+    try { window.loadMaterial = loadMaterial; } catch(e) {}
+    try { window.lockedDialog = lockedDialog; } catch(e) {}
+    try { window.logAudit = logAudit; } catch(e) {}
+    try { window.logoutSim = logoutSim; } catch(e) {}
+    try { window.mapBoq = mapBoq; } catch(e) {}
+    try { window.markAllRead = markAllRead; } catch(e) {}
+    try { window.markErr = markErr; } catch(e) {}
+    try { window.markNonStd = markNonStd; } catch(e) {}
+    try { window.markRead = markRead; } catch(e) {}
+    try { window.matchDetail = matchDetail; } catch(e) {}
+    try { window.matchPanel = matchPanel; } catch(e) {}
+    try { window.matchResult = matchResult; } catch(e) {}
+    try { window.materialAudit = materialAudit; } catch(e) {}
+    try { window.mname = mname; } catch(e) {}
+    try { window.modal = modal; } catch(e) {}
+    try { window.modalStack = modalStack; } catch(e) {}
+    try { window.modeKey = modeKey; } catch(e) {}
+    try { window.mrate = mrate; } catch(e) {}
+    try { window.mreorder = mreorder; } catch(e) {}
+    try { window.muom = muom; } catch(e) {}
+    try { window.myPending = myPending; } catch(e) {}
+    try { window.navCount = navCount; } catch(e) {}
+    try { window.newFromBoq = newFromBoq; } catch(e) {}
+    try { window.notifMenu = notifMenu; } catch(e) {}
+    try { window.notify = notify; } catch(e) {}
+    try { window.nowIso = nowIso; } catch(e) {}
+    try { window.num = num; } catch(e) {}
+    try { window.nval = nval; } catch(e) {}
+    try { window.openDD = openDD; } catch(e) {}
+    try { window.otherStoreQty = otherStoreQty; } catch(e) {}
+    try { window.pad = pad; } catch(e) {}
+    try { window.pageHead = pageHead; } catch(e) {}
+    try { window.paintChain = paintChain; } catch(e) {}
+    try { window.paintCs = paintCs; } catch(e) {}
+    try { window.paintEval = paintEval; } catch(e) {}
+    try { window.paintNotifCount = paintNotifCount; } catch(e) {}
+    try { window.paintReqLines = paintReqLines; } catch(e) {}
+    try { window.paintUser = paintUser; } catch(e) {}
+    try { window.paintWoLines = paintWoLines; } catch(e) {}
+    try { window.pane = pane; } catch(e) {}
+    try { window.pct = pct; } catch(e) {}
+    try { window.pendingReqs = pendingReqs; } catch(e) {}
+    try { window.planToTender = planToTender; } catch(e) {}
+    try { window.postGrn = postGrn; } catch(e) {}
+    try { window.postGrnCore = postGrnCore; } catch(e) {}
+    try { window.postVariances = postVariances; } catch(e) {}
+    try { window.priBadge = priBadge; } catch(e) {}
+    try { window.printWo = printWo; } catch(e) {}
+    try { window.qeCalc = qeCalc; } catch(e) {}
+    try { window.quoteEntry = quoteEntry; } catch(e) {}
+    try { window.raiseDefect = raiseDefect; } catch(e) {}
+    try { window.raiseDelayAlerts = raiseDelayAlerts; } catch(e) {}
+    try { window.reactivateMaterial = reactivateMaterial; } catch(e) {}
+    try { window.recalcForecast = recalcForecast; } catch(e) {}
+    try { window.receiveTransfer = receiveTransfer; } catch(e) {}
+    try { window.recommendRetender = recommendRetender; } catch(e) {}
+    try { window.reconcilePortal = reconcilePortal; } catch(e) {}
+    try { window.recordDispatch = recordDispatch; } catch(e) {}
+    try { window.recordNegotiation = recordNegotiation; } catch(e) {}
+    try { window.recordPayment = recordPayment; } catch(e) {}
+    try { window.recordReplacement = recordReplacement; } catch(e) {}
+    try { window.refreshNavCounts = refreshNavCounts; } catch(e) {}
+    try { window.refundRtv = refundRtv; } catch(e) {}
+    try { window.rejectAdjustment = rejectAdjustment; } catch(e) {}
+    try { window.rejectAdjustmentCore = rejectAdjustmentCore; } catch(e) {}
+    try { window.rejectDisposal = rejectDisposal; } catch(e) {}
+    try { window.rejectDisposalCore = rejectDisposalCore; } catch(e) {}
+    try { window.rejectReq = rejectReq; } catch(e) {}
+    try { window.releaseCommitment = releaseCommitment; } catch(e) {}
+    try { window.releasePg = releasePg; } catch(e) {}
+    try { window.renderTable = renderTable; } catch(e) {}
+    try { window.reorderToRequisition = reorderToRequisition; } catch(e) {}
+    try { window.repaintReqTables = repaintReqTables; } catch(e) {}
+    try { window.replaceRtv = replaceRtv; } catch(e) {}
+    try { window.reqEnsureWf = reqEnsureWf; } catch(e) {}
+    try { window.reqRegister = reqRegister; } catch(e) {}
+    try { window.reqTags = reqTags; } catch(e) {}
+    try { window.reqTotal = reqTotal; } catch(e) {}
+    try { window.requireOk = requireOk; } catch(e) {}
+    try { window.resetDefFilter = resetDefFilter; } catch(e) {}
+    try { window.resetDemo = resetDemo; } catch(e) {}
+    try { window.resetDspFilter = resetDspFilter; } catch(e) {}
+    try { window.resetGrnFilter = resetGrnFilter; } catch(e) {}
+    try { window.resetInvFilter = resetInvFilter; } catch(e) {}
+    try { window.resetMatFilter = resetMatFilter; } catch(e) {}
+    try { window.resetMovFilter = resetMovFilter; } catch(e) {}
+    try { window.resetReqFilter = resetReqFilter; } catch(e) {}
+    try { window.resetStockFilter = resetStockFilter; } catch(e) {}
+    try { window.resetTrailFilter = resetTrailFilter; } catch(e) {}
+    try { window.resetWarrFilter = resetWarrFilter; } catch(e) {}
+    try { window.resetWoFilter = resetWoFilter; } catch(e) {}
+    try { window.resolveDefect = resolveDefect; } catch(e) {}
+    try { window.resolveException = resolveException; } catch(e) {}
+    try { window.restockReturn = restockReturn; } catch(e) {}
+    try { window.returnEntry = returnEntry; } catch(e) {}
+    try { window.returnWo = returnWo; } catch(e) {}
+    try { window.rmLine = rmLine; } catch(e) {}
+    try { window.rmWoLine = rmWoLine; } catch(e) {}
+    try { window.roBanner = roBanner; } catch(e) {}
+    try { window.roleDef = roleDef; } catch(e) {}
+    try { window.roleLimit = roleLimit; } catch(e) {}
+    try { window.roleStrip = roleStrip; } catch(e) {}
+    try { window.routeAllowed = routeAllowed; } catch(e) {}
+    try { window.routeRoles = routeRoles; } catch(e) {}
+    try { window.rtFromIssue = rtFromIssue; } catch(e) {}
+    try { window.rtmBuild = rtmBuild; } catch(e) {}
+    try { window.rtmExport = rtmExport; } catch(e) {}
+    try { window.rtvFromGrn = rtvFromGrn; } catch(e) {}
+    try { window.runAllMatches = runAllMatches; } catch(e) {}
+    try { window.runEscalation = runEscalation; } catch(e) {}
+    try { window.runEscalationNow = runEscalationNow; } catch(e) {}
+    try { window.runMatch = runMatch; } catch(e) {}
+    try { window.save = save; } catch(e) {}
+    try { window.saveAmendment = saveAmendment; } catch(e) {}
+    try { window.saveAudit = saveAudit; } catch(e) {}
+    try { window.saveBoqMap = saveBoqMap; } catch(e) {}
+    try { window.saveChecklistItem = saveChecklistItem; } catch(e) {}
+    try { window.saveDefect = saveDefect; } catch(e) {}
+    try { window.saveDefectUpdate = saveDefectUpdate; } catch(e) {}
+    try { window.saveDispatch = saveDispatch; } catch(e) {}
+    try { window.saveDisposal = saveDisposal; } catch(e) {}
+    try { window.saveDisposalCompletion = saveDisposalCompletion; } catch(e) {}
+    try { window.saveEval = saveEval; } catch(e) {}
+    try { window.saveExtendPg = saveExtendPg; } catch(e) {}
+    try { window.saveGrn = saveGrn; } catch(e) {}
+    try { window.saveInspection = saveInspection; } catch(e) {}
+    try { window.saveInvoice = saveInvoice; } catch(e) {}
+    try { window.saveIssue = saveIssue; } catch(e) {}
+    try { window.saveMaterial = saveMaterial; } catch(e) {}
+    try { window.saveNegotiation = saveNegotiation; } catch(e) {}
+    try { window.saveParams = saveParams; } catch(e) {}
+    try { window.saveQuote = saveQuote; } catch(e) {}
+    try { window.saveReq = saveReq; } catch(e) {}
+    try { window.saveReqCore = saveReqCore; } catch(e) {}
+    try { window.saveResolution = saveResolution; } catch(e) {}
+    try { window.saveReturn = saveReturn; } catch(e) {}
+    try { window.saveToolCheckin = saveToolCheckin; } catch(e) {}
+    try { window.saveToolCheckout = saveToolCheckout; } catch(e) {}
+    try { window.saveTransfer = saveTransfer; } catch(e) {}
+    try { window.saveWo = saveWo; } catch(e) {}
+    try { window.saveWorkflow = saveWorkflow; } catch(e) {}
+    try { window.securitiesScreen = securitiesScreen; } catch(e) {}
+    try { window.securityAct = securityAct; } catch(e) {}
+    try { window.securityAudit = securityAudit; } catch(e) {}
+    try { window.seedBudgetHeads = seedBudgetHeads; } catch(e) {}
+    try { window.seedChecklists = seedChecklists; } catch(e) {}
+    try { window.seedDB = seedDB; } catch(e) {}
+    try { window.seedInterfaces = seedInterfaces; } catch(e) {}
+    try { window.seedMaterials = seedMaterials; } catch(e) {}
+    try { window.seedParams = seedParams; } catch(e) {}
+    try { window.seedStockOther = seedStockOther; } catch(e) {}
+    try { window.selectVendor = selectVendor; } catch(e) {}
+    try { window.sendBackReq = sendBackReq; } catch(e) {}
+    try { window.sendToFinance = sendToFinance; } catch(e) {}
+    try { window.seq = seq; } catch(e) {}
+    try { window.setJustification = setJustification; } catch(e) {}
+    try { window.setLine = setLine; } catch(e) {}
+    try { window.setOverride = setOverride; } catch(e) {}
+    try { window.setPhys = setPhys; } catch(e) {}
+    try { window.setPvReason = setPvReason; } catch(e) {}
+    try { window.setVal = setVal; } catch(e) {}
+    try { window.setWoLine = setWoLine; } catch(e) {}
+    try { window.showProfile = showProfile; } catch(e) {}
+    try { window.showWoWf = showWoWf; } catch(e) {}
+    try { window.simulateBulk = simulateBulk; } catch(e) {}
+    try { window.simulateSync = simulateSync; } catch(e) {}
+    try { window.slaBadge = slaBadge; } catch(e) {}
+    try { window.slaCell = slaCell; } catch(e) {}
+    try { window.slaFor = slaFor; } catch(e) {}
+    try { window.slaItems = slaItems; } catch(e) {}
+    try { window.splitAward = splitAward; } catch(e) {}
+    try { window.stampChecklist = stampChecklist; } catch(e) {}
+    try { window.stockAgeClass = stockAgeClass; } catch(e) {}
+    try { window.stockLedger = stockLedger; } catch(e) {}
+    try { window.stockPanel = stockPanel; } catch(e) {}
+    try { window.stockState = stockState; } catch(e) {}
+    try { window.submitCs = submitCs; } catch(e) {}
+    try { window.submitWo = submitWo; } catch(e) {}
+    try { window.sum = sum; } catch(e) {}
+    try { window.summaryRow = summaryRow; } catch(e) {}
+    try { window.switchRole = switchRole; } catch(e) {}
+    try { window.switchTab = switchTab; } catch(e) {}
+    try { window.syncSub = syncSub; } catch(e) {}
+    try { window.syncWithBackend = syncWithBackend; } catch(e) {}
+    try { window.tableHtml = tableHtml; } catch(e) {}
+    try { window.tabsHtml = tabsHtml; } catch(e) {}
+    try { window.tblExport = tblExport; } catch(e) {}
+    try { window.tblPage = tblPage; } catch(e) {}
+    try { window.tblPaint = tblPaint; } catch(e) {}
+    try { window.tblReload = tblReload; } catch(e) {}
+    try { window.tblRows = tblRows; } catch(e) {}
+    try { window.tblSearch = tblSearch; } catch(e) {}
+    try { window.tblSelAll = tblSelAll; } catch(e) {}
+    try { window.tblSelOne = tblSelOne; } catch(e) {}
+    try { window.tblSize = tblSize; } catch(e) {}
+    try { window.tblSort = tblSort; } catch(e) {}
+    try { window.testRule = testRule; } catch(e) {}
+    try { window.toCsv = toCsv; } catch(e) {}
+    try { window.toast = toast; } catch(e) {}
+    try { window.toggleChecklistItem = toggleChecklistItem; } catch(e) {}
+    try { window.toggleGrp = toggleGrp; } catch(e) {}
+    try { window.toggleRole = toggleRole; } catch(e) {}
+    try { window.toggleRule = toggleRule; } catch(e) {}
+    try { window.toggleWorkflow = toggleWorkflow; } catch(e) {}
+    try { window.toolCheckinEntry = toolCheckinEntry; } catch(e) {}
+    try { window.toolCheckoutEntry = toolCheckoutEntry; } catch(e) {}
+    try { window.trStock = trStock; } catch(e) {}
+    try { window.transferEntry = transferEntry; } catch(e) {}
+    try { window.uid = uid; } catch(e) {}
+    try { window.uniq = uniq; } catch(e) {}
+    try { window.updateDefect = updateDefect; } catch(e) {}
+    try { window.userMenu = userMenu; } catch(e) {}
+    try { window.val = val; } catch(e) {}
+    try { window.validate = validate; } catch(e) {}
+    try { window.viewDefect = viewDefect; } catch(e) {}
+    try { window.viewDisposal = viewDisposal; } catch(e) {}
+    try { window.viewGrn = viewGrn; } catch(e) {}
+    try { window.viewInstrument = viewInstrument; } catch(e) {}
+    try { window.viewInvoice = viewInvoice; } catch(e) {}
+    try { window.viewMaterial = viewMaterial; } catch(e) {}
+    try { window.viewQuote = viewQuote; } catch(e) {}
+    try { window.viewReq = viewReq; } catch(e) {}
+    try { window.viewTender = viewTender; } catch(e) {}
+    try { window.viewWo = viewWo; } catch(e) {}
+    try { window.vname = vname; } catch(e) {}
+    try { window.warrState = warrState; } catch(e) {}
+    try { window.warrantyHistory = warrantyHistory; } catch(e) {}
+    try { window.wfAdvance = wfAdvance; } catch(e) {}
+    try { window.wfBuild = wfBuild; } catch(e) {}
+    try { window.wfCanAct = wfCanAct; } catch(e) {}
+    try { window.wfEnd = wfEnd; } catch(e) {}
+    try { window.wfFinalRole = wfFinalRole; } catch(e) {}
+    try { window.wfGate = wfGate; } catch(e) {}
+    try { window.wfPanel = wfPanel; } catch(e) {}
+    try { window.wfPreviewHtml = wfPreviewHtml; } catch(e) {}
+    try { window.wfPush = wfPush; } catch(e) {}
+    try { window.wfPushSeed = wfPushSeed; } catch(e) {}
+    try { window.wfStage = wfStage; } catch(e) {}
+    try { window.woBudgetCheck = woBudgetCheck; } catch(e) {}
+    try { window.woCalc = woCalc; } catch(e) {}
+    try { window.woChain = woChain; } catch(e) {}
+    try { window.woEnsureWf = woEnsureWf; } catch(e) {}
+    try { window.woFromBid = woFromBid; } catch(e) {}
+    try { window.woFromReq = woFromReq; } catch(e) {}
+    try { window.woIssueCheck = woIssueCheck; } catch(e) {}
+    try { window.woPullReqLines = woPullReqLines; } catch(e) {}
+    try { window.woTaxFactor = woTaxFactor; } catch(e) {}
+    try { window.woTotals = woTotals; } catch(e) {}
+    try { window.woVendorInfo = woVendorInfo; } catch(e) {}
+    try { window.workflowEntry = workflowEntry; } catch(e) {}
 }
