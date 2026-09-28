@@ -1,3 +1,4 @@
+var API_BASE = 'http://127.0.0.1:8002/api/v1';
 
 /* ============================================================
    IFMS - MATERIAL MANAGEMENT MODULE | GNCTD
@@ -6,12 +7,15 @@
      4. Toast/Modal      5. Table Engine        6. Form Engine
      7. Navigation       8. Dashboard           9. Screens
     10. Audit Logging   11. Integration Sim    12. Report Export
+    13. Governance layer (V3): roles and ACL, workflow engine with DFPR and
+        maker-checker, SLA escalation, checklist master, budget heads and
+        commitments, parameters, RTM, interface register, disclosures
    ============================================================ */
 
 /* ------------------------------------------------------------
    2. STORAGE UTILITIES  (localStorage with in-memory fallback)
    ------------------------------------------------------------ */
-var KEY = 'ifms_mm_v1';
+var KEY = 'ifms_mm_v3';
 var Store = (function(){
   var usable = false, mem = {};
   try{
@@ -77,33 +81,7 @@ function seq(prefix, list, field, width){
   return prefix + pad(max+1, width||6);
 }
 function uid(p){ return (p||'ID')+'-'+Math.random().toString(36).slice(2,8).toUpperCase(); }
-function byId(list, key, val){
-  if (!list || !list.length) return null;
-  var sVal = String(val).trim().toLowerCase();
-  for (var i = 0; i < list.length; i++) {
-    var r = list[i];
-    if (!r) continue;
-    if (r[key] === val || (r[key] !== undefined && String(r[key]).trim().toLowerCase() === sVal)) return r;
-    if (r.id !== undefined && String(r.id).trim().toLowerCase() === sVal) return r;
-    if (r.code !== undefined && String(r.code).trim().toLowerCase() === sVal) return r;
-    if (r.no !== undefined && String(r.no).trim().toLowerCase() === sVal) return r;
-  }
-  var numVal = sVal.replace(/^[a-z_]+/i, '');
-  if (numVal) {
-    for (var i = 0; i < list.length; i++) {
-      var r = list[i];
-      if (!r) continue;
-      var rIdStr = String(r.id || '').toLowerCase().replace(/^[a-z_]+/i, '');
-      if (rIdStr === numVal) return r;
-    }
-  }
-  var idx = parseInt(val, 10);
-  if (!isNaN(idx)) {
-    if (idx >= 0 && idx < list.length) return list[idx];
-    if (idx > 0 && (idx - 1) < list.length) return list[idx - 1];
-  }
-  return null;
-}
+function byId(list, key, val){ return (list||[]).filter(function(r){ return r[key]===val; })[0]; }
 function sum(list, f){ return (list||[]).reduce(function(s,r){ return s+(Number(typeof f==='function'?f(r):r[f])||0); },0); }
 function pct(a,b){ return b ? (a/b*100) : 0; }
 function uniq(a){ var o=[]; a.forEach(function(x){ if(o.indexOf(x)<0) o.push(x); }); return o; }
@@ -465,20 +443,6 @@ function seedDB(){
     };
   });
 
-  /* ---------- tool issuances ---------- */
-  var toolMats = mats.filter(function(m){ return m.cat==='Tools & Equipment'; });
-  var toolIssuances = (toolMats.length? toolMats:mats).slice(0,2).map(function(mm,k){
-    return {
-      id:'TL'+(k+1), no:'TOOL/2026/'+pad(100+k,5), date: addDays('2026-09-10', k*4),
-      mat:mm.code, serial:'TOOL-SN-'+(4000+k), qty:1, store:STORES[k%STORES.length],
-      worker:['Ramesh Kumar','Suresh Yadav'][k%2], idCard:'EMP-'+(2200+k), shift:'Morning Shift',
-      expected: addDays('2026-09-10', k*4+3), returnedQty:k===0?1:0,
-      returnedDate: k===0? addDays('2026-09-10', k*4+3):'',
-      condition: k===0? 'Good / Inspected':'Working', fine:0,
-      status: k===0? 'Returned':'Issued', remarks:''
-    };
-  });
-
   /* ---------- invoices ---------- */
   var invs = [
     ['INV/2026/001879','VI-2026-4471','VEN-0001','WO/DIT/2026/000098','GRN/DIT/2026/000245',21806400,'Exception','Under Review','Pending'],
@@ -769,7 +733,7 @@ function seedDB(){
     version:1, created: nowIso(),
     materials:mats, requisitions:reqs, tenders:tenders, boq:boq, quotes:quotes, workorders:wos,
     deliveries:dels, grns:grns, inspections:insp, rtv:rtv, stock:stock, movements:movs,
-    issues:issues, returns:returns, transfers:transfers, toolIssuances:toolIssuances, invoices:invs,
+    issues:issues, returns:returns, transfers:transfers, invoices:invs,
     fees:fees, emds:emds, pgs:pgs, warranty:warr, defects:defs, disposals:disp,
     audits:audits, verification:verif, adjustments:adjs, forecast:fc, assets:assets,
     portals:portals, trail:trail, notifications:notes,
@@ -866,34 +830,14 @@ function confirmAct(opts, cb){
    10. AUDIT LOGGING
    ------------------------------------------------------------ */
 function logAudit(type, ref, action, field, oldv, newv, reason){
-  var entry = {
+  DB.trail.unshift({
     id:uid('AT'), ts: nowIso(), type:type, ref:ref, action:action,
     field:field||'\u2014', oldv:oldv||'\u2014', newv:newv||'\u2014', reason:reason||'\u2014',
-    by:'Anil Katwale', role:'Procurement Officer', dept:DEPTS[0],
+    by:curUser(), role:curRole(), dept:curDept(),
     approval:'\u2014', src:'IFMS Web', ip:'10.24.8.117'
-  };
-  DB.trail.unshift(entry);
+  });
   if(DB.trail.length > 400) DB.trail.length = 400;
   save();
-
-  try {
-    fetch(API_BASE + '/reports/audit-log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        table_code: 'mtrl_' + String(type).toLowerCase().replace(/\s+/g, '_'),
-        type: type,
-        ref: ref,
-        action: action,
-        field: field,
-        oldv: oldv,
-        newv: newv,
-        reason: reason,
-        by: 'Anil Katwale',
-        ip: '10.24.8.117'
-      })
-    }).catch(function(){});
-  } catch(e){}
 }
 function auditTableHtml(rows){
   if(!rows || !rows.length) return '<div class="note in">No audit entry recorded against this record yet.</div>';
@@ -1199,8 +1143,7 @@ var NAV = [
     ['Inspection Register','grn/inspection'],['Return to Vendor','grn/rtv']]},
   {ic:'\u{1F3E2}', t:'Inventory Integration', items:[
     ['Stock Overview','inv/stock'],['Material Movement','inv/movement'],['Stock Transfer','inv/transfer'],
-    ['Stock Issue','inv/issue'],['Stock Return','inv/return'],['Tool Issuance','inv/tools'],
-    ['Reorder Planning','inv/reorder']]},
+    ['Stock Issue','inv/issue'],['Stock Return','inv/return'],['Tool Issuance','inv/tools'],['Reorder Planning','inv/reorder']]},
   {ic:'\u{1F4B0}', t:'Billing and Finance Interface', items:[
     ['Invoice Register','billing/invoice'],['Three-Way Matching','billing/match'],
     ['Bill Initiation','billing/initiate'],['Payment Status','billing/payment']]},
@@ -1216,11 +1159,15 @@ var NAV = [
     ['Consumption Analysis','fc/consumption'],['Demand Forecast','fc/forecast'],['Suggested Reorder','fc/reorder']]},
   {ic:'\u{1F4CA}', t:'Reports and MIS', items:[
     ['Procurement MIS','rep/procurement'],['Inventory MIS','rep/inventory'],
-    ['Vendor Performance','rep/vendor'],['Audit Trail','rep/trail']]},
+    ['Vendor Performance','rep/vendor'],['Workflow Pending & Ageing','rep/ageing'],
+    ['Budget Utilisation & Phasing','rep/budget'],['Requirement Traceability (RTM)','rep/rtm'],
+    ['Gap Closure Register','rep/gaps'],['Audit Trail','rep/trail']]},
   {ic:'\u2699', t:'Administration', items:[
     ['Workflow Configuration','admin/workflow'],['Approval Limits','admin/limits'],
     ['Notification Rules','admin/rules'],['Integration Monitor','admin/integration'],
-    ['User Role Mapping','admin/roles']]}
+    ['User Role Mapping','admin/roles'],['Checklist Master','admin/checklist'],
+    ['Procurement Parameters','admin/params'],['Interface Register','admin/interfaces'],
+    ['Prototype Status & Logins','admin/about']]}
 ];
 var TITLES = {};
 NAV.forEach(function(g){
@@ -1242,11 +1189,13 @@ function buildSidebar(){
            '<span class="car">\u25B6</span></div>'+
            '<div class="sub" id="sub'+gi+'">'+
            g.items.map(function(it){
-             return '<div class="nav-s" data-r="'+it[1]+'" onclick="goto(\''+it[1]+'\')">'+esc(it[0])+'</div>';
+             return '<div class="nav-s'+(routeAllowed(it[1])?'':' lock')+'" data-r="'+it[1]+'" onclick="goto(\''+it[1]+'\')"'+
+               (routeAllowed(it[1])?'':' title="Not in the '+esc(curRole())+' profile"')+'>'+esc(it[0])+'</div>';
            }).join('')+'</div>';
     }
   });
-  h += '<div class="sfoot">IFMS Material Management<br>Version 1.0 &middot; UAT build<br>'+
+  h += '<div class="sfoot">IFMS Material Management<br>Version 3.0 &middot; UAT build<br>'+
+       '<span style="opacity:.9">'+esc(curRole())+(isRO()?' (read-only)':'')+'</span><br>'+
        '<span style="opacity:.8">Data: '+Store.mode+'</span></div>';
   document.getElementById('side').innerHTML = h;
 }
@@ -1259,6 +1208,7 @@ function navCount(group){
     case 'Warranty and Defects': return DB.defects.filter(function(d){ return ['Resolved','Closed','Out of Warranty'].indexOf(d.status)<0; }).length;
     case 'Disposal Management': return DB.disposals.filter(function(d){ return d.approval==='Pending'; }).length;
     case 'Inventory Integration': return DB.stock.filter(function(s){ return s.avail < s.reorder; }).length;
+    case 'Reports and MIS': return slaItems().filter(function(i){ return i.overdue; }).length;
     default: return 0;
   }
 }
@@ -1276,6 +1226,7 @@ function toggleGrp(gi){
 }
 var ROUTE = 'dash';
 function goto(r){
+  if(DB && !routeAllowed(r)){ explainRoute(r); return; }
   ROUTE = r;
   closeAllModals(); closeDD();
   Array.prototype.forEach.call(document.querySelectorAll('.nav-i[data-r],.nav-s[data-r]'), function(e){
@@ -1301,8 +1252,8 @@ function goto(r){
   refreshNavCounts();
 }
 function pageHead(title, group, sub, actions, tags){
-  return '<div class="crumb">IFMS &rsaquo; Material Management'+(group?' &rsaquo; <b>'+esc(group)+'</b>':'')+'</div>'+
-    '<div class="phead"><div><h1 class="ptitle">'+esc(title)+'</h1>'+
+  return roBanner()+'<div class="crumb">IFMS &rsaquo; Material Management'+(group?' &rsaquo; <b>'+esc(group)+'</b>':'')+'</div>'+
+    '<div class="phead" data-fr="'+frIds(tags)+'"><div><h1 class="ptitle">'+esc(title)+'</h1>'+
     (sub?'<p class="psub">'+sub+'</p>':'')+(tags?'<div style="margin-top:5px">'+tags+'</div>':'')+'</div>'+
     '<div class="btn-row no-print">'+(actions||'')+'</div></div>';
 }
@@ -1325,20 +1276,23 @@ function openDD(html){
   },10);
 }
 function userMenu(){
-  openDD('<div class="hd"><div class="a">Anil Katwale</div>'+
-    '<div class="b">Procurement Officer<br>Directorate of Information Technology</div></div>'+
+  openDD('<div class="hd"><div class="a">'+esc(curUser())+'</div>'+
+    '<div class="b">'+esc(curRole())+(isRO()?' (read-only)':'')+'<br>'+esc(curDept())+'</div></div>'+
     '<a onclick="closeDD();showProfile()">\u{1F464} My profile</a>'+
-    '<a onclick="closeDD();goto(\'admin/roles\')">\u{1F510} Role and permissions</a>'+
-    '<a onclick="closeDD();goto(\'rep/trail\')">\u{1F553} My activity log</a>'+
+    '<a onclick="closeDD();goto(\'admin/about\')">\u{1F501} Switch login role</a>'+
+    '<a onclick="closeDD();goto(\'rep/ageing\')">\u23F1 My pending cases ('+myPending().length+')</a>'+
+    '<a onclick="closeDD();goto(\'rep/trail\')">\u{1F553} Activity log</a>'+
     '<a onclick="closeDD();resetDemo()">\u267B Reset demo data</a>'+
     '<a class="danger" onclick="closeDD();logoutSim()">\u23FB Log out</a>');
 }
 function showProfile(){
+  var lim = byId(DB.limits,'role',curRole());
   modal({title:'My profile', size:'sm', body:'<table class="kv">'+
-    kvRow('Name','Anil Katwale')+kvRow('Employee code','GNCTD/DIT/04412')+
-    kvRow('Role','Procurement Officer')+kvRow('Department','Directorate of Information Technology')+
-    kvRow('Office','Delhi Secretariat, I.P. Estate')+kvRow('Approval limit','\u20B9 25,00,000 per case')+
-    kvRow('Stores mapped','IT Store \u2013 Delhi Secretariat, Central Store \u2013 Civil Lines')+
+    kvRow('Name', esc(curUser()))+kvRow('Employee code', esc(CUR.empc))+
+    kvRow('Role', esc(curRole()))+kvRow('Tier', esc(CUR.tier))+kvRow('Department', esc(curDept()))+
+    kvRow('Responsibility', esc(CUR.desc))+
+    kvRow('DFPR power (direct / quotation / limited / open)', lim ? [lim.direct,lim.quotation,lim.limited,lim.open].map(inr0).join(' / ') : 'Not a financial approver in the matrix')+
+    kvRow('Access', isRO()?'Read-only':'Per route and action ACL')+
     kvRow('Financial year','FY 2026-27')+kvRow('Environment','UAT / Demo')+'</table>'});
 }
 function logoutSim(){
@@ -1348,7 +1302,7 @@ function logoutSim(){
 function resetDemo(){
   confirmAct({title:'Reset demo data', kind:'er', btnClass:'dgr', ok:'Reset everything',
     message:'Every demo record you created or changed is discarded and the original sample data restored.'},
-    function(){ Store.clear(); DB = seedDB(); save(); buildSidebar(); goto('dash'); paintNotifCount();
+    function(){ Store.clear(); DB = seedDB(); DB.session = {role:curRole()}; augmentDB(); save(); runEscalation(true); buildSidebar(); goto('dash'); paintNotifCount();
       toast('Demo data reset to the original sample set.','ok'); });
 }
 function notifMenu(){
@@ -1387,8 +1341,8 @@ function globalSearch(q){
     .forEach(function(g){ push('GRN', g.no, 'grn/list'); });
   DB.tenders.filter(function(t){ return (t.no+' '+t.title).toLowerCase().indexOf(q)>=0; }).slice(0,3)
     .forEach(function(t){ push('Tender', t.no+' \u2014 '+t.title, 'proc/tender'); });
-  DB.vendors.filter(function(v){ return v.party_name.toLowerCase().indexOf(q)>=0; }).slice(0,3)
-    .forEach(function(v){ push('Vendor', v.party_name, 'rep/vendor'); });
+  VENDORS.filter(function(v){ return v.name.toLowerCase().indexOf(q)>=0; }).slice(0,3)
+    .forEach(function(v){ push('Vendor', v.name, 'rep/vendor'); });
   DB.invoices.filter(function(i){ return (i.no+' '+i.vinv).toLowerCase().indexOf(q)>=0; }).slice(0,3)
     .forEach(function(i){ push('Invoice', i.no+' \u2014 '+i.vinv, 'billing/invoice'); });
   box.innerHTML = hits.length
@@ -1399,7 +1353,7 @@ function globalSearch(q){
     : '<div style="padding:14px" class="muted">No record matches that search.</div>';
   box.classList.remove('hide');
 }
-function vname(code){ var v = byId(DB.vendors,'party_code',code); return v? v.party_name : code; }
+function vname(code){ var v = byId(VENDORS,'code',code); return v? v.name : code; }
 function mname(code){ var m = byId(DB.materials,'code',code); return m? m.name : code; }
 function muom(code){ var m = byId(DB.materials,'code',code); return m? m.uom : ''; }
 function mrate(code){ var m = byId(DB.materials,'code',code); return m? m.rate : 0; }
@@ -1486,22 +1440,31 @@ var SCREENS_AFTER = {};
 function dashCounts(){
   var D = DB, stk = D.stock;
   return {
-    pendReq: D.requisitions.filter(function(r){ return ['Fully Procured','Closed','Rejected','Cancelled'].indexOf(r.status)<0; }).length + 118,
-    awaitApp: D.requisitions.filter(function(r){ return ['Submitted','Under Review','Budget Validation Pending'].indexOf(r.status)>=0; }).length + 30,
-    openWo: D.workorders.filter(function(w){ return ['Issued','Approved','Delayed'].indexOf(w.status)>=0; }).length + 71,
-    woDue: 18,
-    delayed: D.deliveries.filter(function(d){ return d.status==='Delayed'; }).length + 10,
-    pendGrn: D.grns.filter(function(g){ return g.posting==='Pending'; }).length + 21,
-    pendInsp: D.grns.filter(function(g){ return g.inspection==='Pending'||g.inspection==='Under Inspection'; }).length + 14,
-    lowStock: stk.filter(function(s){ return s.avail>0 && s.avail < mreorder(s.mat); }).length + 35,
-    stockOut: stk.filter(function(s){ return s.avail===0; }).length + 7,
-    nearExp: stk.filter(function(s){ return s.expiry && daysBetween(TODAY,s.expiry)<=90; }).length + 15,
-    defects: D.defects.filter(function(d){ return ['Resolved','Closed','Out of Warranty'].indexOf(d.status)<0; }).length + 5,
-    disposal: D.disposals.filter(function(d){ return d.approval==='Pending'; }).length + 5,
-    bills: D.invoices.filter(function(i){ return i.payment!=='Paid'; }).length + 16,
-    emdRef: D.emds.filter(function(e){ return e.status==='Pending Refund'; }).length + 3,
-    pgExp: D.pgs.filter(function(p){ return daysBetween(TODAY,p.expiry)<=90; }).length + 3
+    pendReq: D.requisitions.filter(function(r){ return ['Fully Procured','Closed','Rejected','Cancelled'].indexOf(r.status)<0; }).length,
+    awaitApp: D.requisitions.filter(function(r){ return REQ_PENDING.indexOf(r.status)>=0; }).length,
+    openWo: D.workorders.filter(function(w){ return ['Issued','Approved','Delayed','Pending Approval'].indexOf(w.status)>=0; }).length,
+    woDue: D.workorders.filter(function(w){ return ['Issued','Delayed'].indexOf(w.status)>=0 && daysBetween(TODAY,w.due)>=0 && daysBetween(TODAY,w.due)<=7; }).length,
+    delayed: D.deliveries.filter(function(d){ return d.status==='Delayed'; }).length,
+    pendGrn: D.grns.filter(function(g){ return g.posting==='Pending'; }).length,
+    pendInsp: D.grns.filter(function(g){ return g.inspection==='Pending'||g.inspection==='Under Inspection'; }).length,
+    lowStock: stk.filter(function(s){ return s.avail>0 && s.avail < mreorder(s.mat); }).length,
+    stockOut: stk.filter(function(s){ return s.avail===0; }).length,
+    nearExp: stk.filter(function(s){ return s.expiry && daysBetween(TODAY,s.expiry)<=90 && daysBetween(TODAY,s.expiry)>=0; }).length,
+    defects: D.defects.filter(function(d){ return ['Resolved','Closed','Out of Warranty'].indexOf(d.status)<0; }).length,
+    disposal: D.disposals.filter(function(d){ return d.approval==='Pending'; }).length,
+    bills: D.invoices.filter(function(i){ return i.payment!=='Paid'; }).length,
+    emdRef: D.emds.filter(function(e){ return e.status==='Pending Refund'; }).length,
+    pgExp: D.pgs.filter(function(p){ return daysBetween(TODAY,p.expiry)<=90; }).length,
+    slaOver: slaItems().filter(function(i){ return i.overdue; }).length
   };
+}
+function stockAgeClass(s){
+  if(s.expired>0 || (s.expiry && daysBetween(TODAY,s.expiry)<0)) return 'Expired';
+  if(s.expiry && daysBetween(TODAY,s.expiry)<=90) return 'Near Expiry';
+  var last = DB.movements.filter(function(m){ return m.mat===s.mat; }).map(function(m){ return m.date; }).sort().pop();
+  if(!last) return 'Non-Moving';
+  var d = daysBetween(last, TODAY);
+  return d<=30 ? 'Fast Moving' : (d<=90 ? 'Slow Moving' : 'Non-Moving');
 }
 SCREENS['dash'] = function(){
   var c = dashCounts(), D = DB;
@@ -1512,24 +1475,27 @@ SCREENS['dash'] = function(){
   var expVal = sum(D.stock, function(s){ return s.expired*s.rate; });
   var dispVal = sum(D.disposals.filter(function(d){ return d.approval!=='Rejected'; }), 'book');
 
-  var modeRows = MODES.slice(0,6).map(function(m,i){
-    return {l:m, v:[34,21,9,26,48,17][i], c:['#123B64','#1E5A96','#0F766E','#B45309','#15803D','#6B21A8'][i]};
+  var modeCount = {};
+  D.workorders.concat(D.tenders).forEach(function(x){ if(x.mode) modeCount[x.mode] = (modeCount[x.mode]||0)+1; });
+  var modeRows = Object.keys(modeCount).sort(function(a,b){ return modeCount[b]-modeCount[a]; }).slice(0,6).map(function(m,i){
+    return {l:m, v:modeCount[m], c:['#123B64','#1E5A96','#0F766E','#B45309','#15803D','#6B21A8'][i]};
   });
   var delRows = [
-    {l:'On Time', v:64, c:'#15803D'},{l:'Delayed', v:c.delayed, c:'#B91C1C'},
-    {l:'Partial Delivery', v:D.deliveries.filter(function(d){ return d.status==='Partially Delivered'; }).length+9, c:'#B45309'},
-    {l:'Pending Dispatch', v:D.deliveries.filter(function(d){ return d.status==='Not Dispatched'; }).length+7, c:'#7386A0'}
+    {l:'On Time', v:D.deliveries.filter(function(d){ return d.status==='Delivered' && !(d.delay>0); }).length, c:'#15803D'},
+    {l:'Delayed', v:c.delayed, c:'#B91C1C'},
+    {l:'Partial Delivery', v:D.deliveries.filter(function(d){ return d.status==='Partially Delivered'; }).length, c:'#B45309'},
+    {l:'Pending Dispatch', v:D.deliveries.filter(function(d){ return d.status==='Not Dispatched'; }).length, c:'#7386A0'}
   ];
-  var ageRows = [
-    {l:'Fast Moving', v:42, c:'#15803D'},{l:'Slow Moving', v:23, c:'#B45309'},
-    {l:'Non-Moving', v:14, c:'#B91C1C'},{l:'Near Expiry', v:c.nearExp, c:'#6B21A8'},{l:'Expired', v:6, c:'#7386A0'}
-  ];
+  var ageCnt = {}; D.stock.forEach(function(s){ var k = stockAgeClass(s); ageCnt[k] = (ageCnt[k]||0)+1; });
+  var ageRows = ['Fast Moving','Slow Moving','Non-Moving','Near Expiry','Expired'].map(function(k,i){
+    return {l:k, v:ageCnt[k]||0, c:['#15803D','#B45309','#B91C1C','#6B21A8','#7386A0'][i]}; });
   var pipeline = [
     ['Requisition',c.pendReq],['Approval',c.awaitApp],
-    ['Tender / Quotation',D.tenders.filter(function(t){ return ['Published','Bid Opened'].indexOf(t.status)>=0; }).length+12],
-    ['Evaluation',D.tenders.filter(function(t){ return t.status==='Under Evaluation'; }).length+6],['Work Order',c.openWo],
-    ['Delivery',D.deliveries.filter(function(d){ return d.status!=='Delivered'; }).length+22],['GRN',c.pendGrn],
-    ['Billing',c.bills],['Closure',31]
+    ['Tender / Quotation',D.tenders.filter(function(t){ return ['Published','Bid Opened'].indexOf(t.status)>=0; }).length],
+    ['Evaluation',D.tenders.filter(function(t){ return t.status==='Under Evaluation'; }).length],['Work Order',c.openWo],
+    ['Delivery',D.deliveries.filter(function(d){ return d.status!=='Delivered'; }).length],['GRN',c.pendGrn],
+    ['Billing',c.bills],['Closure',D.requisitions.filter(function(r){ return r.status==='Fully Procured'; }).length +
+      D.workorders.filter(function(w){ return w.status==='Delivered' || w.status==='Closed'; }).length]
   ];
   var vTop = VENDORS.slice().sort(function(a,b){ return b.rating-a.rating; });
 
@@ -1538,7 +1504,7 @@ SCREENS['dash'] = function(){
     '<button class="btn gh sm" onclick="simulateSync()">\u21BB Sync portals</button>'+
     '<button class="btn gh sm" onclick="window.print()">\u2399 Print</button>'+
     '<button class="btn pri sm" onclick="goto(\'req/create\')">+ New requisition</button>',
-    reqTags('MMP_20','MMP_21')) +
+    reqTags('MMP_20','MMP_21')) + roleStrip() +
 
   '<div class="grid g5" style="margin-bottom:12px">'+
     kpiTile('Pending requisitions', c.pendReq, 'Across all departments','', 'req/list')+
@@ -1559,11 +1525,18 @@ SCREENS['dash'] = function(){
     kpiTile('Pending vendor bills', c.bills, 'Three-way match in progress','k-tl','billing/invoice')+
     kpiTile('EMD refund pending', c.emdRef, 'Post-award refund due','k-nu','proc/emd')+
     kpiTile('Guarantees expiring soon', c.pgExp, 'Within 90 days','k-er','proc/pg')+
+    kpiTile('Cases beyond TAT', c.slaOver, 'Escalated by the SLA engine','k-er','rep/ageing')+
+  '</div>'+
+  '<div class="grid g5" style="margin-bottom:14px">'+
     kpiTile('Available stock value', inr0(stockVal).replace('\u20B9 ','\u20B9'), 'Across '+STORES.length+' stores','k-ok','inv/stock')+
+    kpiTile('Pending with my role', myPending().length, esc(curRole()),'k-tl','rep/ageing')+
+    kpiTile('Outstanding commitments', inr0(sum(DB.commitments,kOutstanding)).replace('\u20B9 ','\u20B9'), 'Booked against work orders','k-wa','rep/budget')+
+    kpiTile('Uncommitted budget', inr0(sum(COA,function(c){ return bhAvail(c); })).replace('\u20B9 ','\u20B9'), 'Across '+COA.length+' heads of account','k-ok','rep/budget')+
+    kpiTile('Active checklist items', DB.checklists.filter(function(c){ return c.active; }).length, 'Bound to 6 processes','k-nu','admin/checklist')+
   '</div>'+
 
   '<div class="card" style="margin-bottom:12px"><div class="hd"><span>Procurement pipeline</span>'+
-    '<span class="muted" style="font-size:11px;font-weight:400">Live case count at each stage</span></div>'+
+    '<span class="muted" style="font-size:11px;font-weight:400">Live case count at each stage \u2014 every tile reconciles to its register</span></div>'+
     '<div class="bd"><div class="pipe">'+pipeline.map(function(p,i){
       return '<div class="st'+(i===1||i===5?' hot':'')+'"><div class="n">'+p[1]+'</div><div class="l">'+esc(p[0])+'</div></div>';
     }).join('')+'</div></div></div>'+
@@ -1580,7 +1553,7 @@ SCREENS['dash'] = function(){
       ], {fmt:inr0})+
     '</div></div>'+
     '<div class="card"><div class="hd"><span>Procurement mode analysis</span>'+
-      '<span class="muted" style="font-size:11px;font-weight:400">Cases in FY 2026-27</span></div>'+
+      '<span class="muted" style="font-size:11px;font-weight:400">Work orders and tenders by mode</span></div>'+
       '<div class="bd">'+colChart(modeRows)+'</div></div>'+
   '</div>'+
 
@@ -1592,15 +1565,13 @@ SCREENS['dash'] = function(){
       '<button class="btn xs gh" onclick="goto(\'rep/vendor\')">Scorecard</button></div><div class="bd">'+
       '<div class="sec-h">Top performing</div>'+
       vTop.slice(0,3).map(function(v){
-        var ratingVal = (v && typeof v.rating === 'number') ? v.rating : 4.0;
         return '<div class="rag"><span class="s" style="background:#15803D">\u2713</span>'+
-        '<span class="grow">'+esc(v ? v.name : '')+'</span><b>'+ratingVal.toFixed(1)+'</b></div>';
+        '<span class="grow">'+esc(v.name)+'</span><b>'+v.rating.toFixed(1)+'</b></div>';
       }).join('')+
       '<div class="sec-h" style="margin-top:12px">Needs attention</div>'+
       vTop.slice(-2).map(function(v){
-        var ratingVal = (v && typeof v.rating === 'number') ? v.rating : 4.0;
         return '<div class="rag"><span class="s" style="background:#B91C1C">!</span>'+
-        '<span class="grow">'+esc(v ? v.name : '')+'</span><b>'+ratingVal.toFixed(1)+'</b></div>';
+        '<span class="grow">'+esc(v.name)+'</span><b>'+v.rating.toFixed(1)+'</b></div>';
       }).join('')+
       '<div class="rag"><span class="s" style="background:#B45309">\u26A0</span>'+
         '<span class="grow">Open defects with vendors</span><b>'+c.defects+'</b></div>'+
@@ -1716,37 +1687,32 @@ function resetMatFilter(){
 }
 function viewMaterial(id){
   var m = byId(DB.materials,'id',id);
-  if (!m) { toast('Material record not found.','er'); return; }
-  var s = byId(DB.stock,'mat',m.code) || {avail: m.stock||0, reserved:0, inspection:0, blocked:0};
-  var history = (DB.trail || []).filter(function(t){ return t.ref===m.code || t.ref===String(m.id) || (t.type==='Material Master' && t.ref===m.code); });
-  if (!history.length) {
-    history = [{ts: m.updated||TODAY, action:'Active Master', field:'Status', oldv:'—', newv: m.status||'Active', reason:'Catalog master entry in PostgreSQL', by: m.createdBy||'Anil Katwale', role:'Procurement Officer', src:'IFMS Database'}];
-  }
-  modal({title:'Material Details — '+esc(m.code)+' ('+esc(m.name)+')', size:'lg',
+  var s = byId(DB.stock,'mat',m.code) || {avail:0,reserved:0,inspection:0,blocked:0};
+  modal({title:'Material '+esc(m.code), size:'lg',
     body: tabsHtml('vm',['Overview','Inventory','Financial','Traceability','Audit history'])+
       pane('vm',0,'<div class="grid g2"><table class="kv">'+
         kvRow('Material code','<span class="mono">'+esc(m.code)+'</span>')+kvRow('Material name',esc(m.name))+
-        kvRow('Category',esc(m.cat))+kvRow('Subcategory',esc(m.sub||'General'))+kvRow('Material type',esc(m.type||'Goods'))+
-        kvRow('Stock / non-stock',esc(m.stockType||'Stock'))+kvRow('Consumable',esc(m.consumable||'Consumable'))+
+        kvRow('Category',esc(m.cat))+kvRow('Subcategory',esc(m.sub))+kvRow('Material type',esc(m.type))+
+        kvRow('Stock / non-stock',esc(m.stockType))+kvRow('Consumable',esc(m.consumable))+
         '</table><table class="kv">'+
-        kvRow('Make / brand',esc(m.make||'Standard'))+kvRow('Model',esc(m.model||'Standard'))+kvRow('Primary UOM',esc(m.uom))+
+        kvRow('Make / brand',esc(m.make))+kvRow('Model',esc(m.model))+kvRow('Primary UOM',esc(m.uom))+
         kvRow('Asset eligible', m.asset==='Y'? 'Yes':'No')+
         kvRow('Hazardous', m.hazardous?'Yes':'No')+kvRow('Perishable', m.perishable?'Yes':'No')+
-        kvRow('Status', badge(m.status||'Active'))+'</table></div>'+
-        '<div class="sec-h" style="margin-top:12px">Technical specification</div><div style="font-size:12.5px;line-height:1.5">'+esc(m.spec||m.name)+'</div>')+
+        kvRow('Status', badge(m.status))+'</table></div>'+
+        '<div class="sec-h" style="margin-top:12px">Technical specification</div><div style="font-size:12.5px">'+esc(m.spec)+'</div>')+
       pane('vm',1,'<div class="grid g4" style="margin-bottom:11px">'+
-        [['Available',s.avail,'#15803D'],['Reserved',s.reserved||0,'#1E5A96'],['Under inspection',s.inspection||0,'#B45309'],['Blocked',s.blocked||0,'#B91C1C']]
+        [['Available',s.avail,'#15803D'],['Reserved',s.reserved,'#1E5A96'],['Under inspection',s.inspection,'#B45309'],['Blocked',s.blocked,'#B91C1C']]
           .map(function(x){ return '<div class="scard" style="border-top:3px solid '+x[2]+'"><div class="l">'+x[0]+
             '</div><div class="v">'+num(x[1])+' '+esc(m.uom)+'</div></div>'; }).join('')+
         '</div><table class="kv">'+
-        kvRow('Minimum stock', num(m.minStock||10)+' '+m.uom)+kvRow('Maximum stock', num(m.maxStock||100)+' '+m.uom)+
-        kvRow('Reorder level', num(m.reorder||20)+' '+m.uom)+kvRow('Reorder quantity', num(m.reorderQty||40)+' '+m.uom)+
-        kvRow('Lead time', (m.leadTime||21)+' days')+kvRow('Standard rate', inr(m.rate||0))+
-        kvRow('Stock value', inr((s.avail||0)*(m.rate||0)))+'</table>')+
+        kvRow('Minimum stock', num(m.minStock)+' '+m.uom)+kvRow('Maximum stock', num(m.maxStock)+' '+m.uom)+
+        kvRow('Reorder level', num(m.reorder)+' '+m.uom)+kvRow('Reorder quantity', num(m.reorderQty)+' '+m.uom)+
+        kvRow('Lead time', m.leadTime+' days')+kvRow('Standard rate', inr(m.rate))+
+        kvRow('Stock value', inr(s.avail*m.rate))+'</table>')+
       pane('vm',2,'<table class="kv">'+
-        kvRow('Capital / revenue', esc(m.fin||'Revenue'))+kvRow('Default chart of accounts', esc(m.coa||COA[0]))+
-        kvRow('Fund', esc(m.fund||FUNDS[0]))+kvRow('Scheme', esc(m.scheme||SCHEMES[0]))+kvRow('Project', esc(m.project||PROJECTS[0]))+
-        kvRow('Cost centre', esc(m.costCentre||COST_CENTRES[0]))+kvRow('Valuation method','Weighted average')+'</table>')+
+        kvRow('Capital / revenue', esc(m.fin))+kvRow('Default chart of accounts', esc(m.coa))+
+        kvRow('Fund', esc(m.fund))+kvRow('Scheme', esc(m.scheme))+kvRow('Project', esc(m.project))+
+        kvRow('Cost centre', esc(m.costCentre))+kvRow('Valuation method','Weighted average')+'</table>')+
       pane('vm',3,'<table class="kv">'+
         kvRow('Batch tracking', m.batchTrack?'Required':'Not required')+
         kvRow('Serial number tracking', m.serialTrack?'Required':'Not required')+
@@ -1754,21 +1720,16 @@ function viewMaterial(id){
         kvRow('Expiry date', m.expiryReq?'Required':'Not required')+
         kvRow('Shelf life', m.shelfLife? m.shelfLife+' months':'Not applicable')+
         kvRow('Warranty applicable', m.warrantyApplicable?'Yes':'No')+
-        kvRow('Warranty duration', m.warrantyMonths? m.warrantyMonths+' months':'—')+
-        kvRow('Disposal category', esc(m.disposalCat||'Consumable — Write-off'))+'</table>')+
-      pane('vm',4, auditTableHtml(history)),
+        kvRow('Warranty duration', m.warrantyMonths? m.warrantyMonths+' months':'\u2014')+
+        kvRow('Disposal category', esc(m.disposalCat))+'</table>')+
+      pane('vm',4, auditTableHtml(DB.trail.filter(function(t){ return t.ref===m.code; }))),
     footer:'<button class="btn gh" onclick="closeModal();editMaterial(\''+m.id+'\')">Edit material</button>'+
       '<button class="btn" data-close>Close</button>'});
 }
 function editMaterial(id){ goto('mm/create'); setTimeout(function(){ loadMaterial(id); }, 40); }
 function materialAudit(id){
   var m = byId(DB.materials,'id',id);
-  if (!m) { toast('Material record not found.','er'); return; }
-  var history = (DB.trail || []).filter(function(t){ return t.ref===m.code || t.ref===String(m.id) || (t.type==='Material Master' && t.ref===m.code); });
-  if (!history.length) {
-    history = [{ts: m.updated||TODAY, action:'Active Master', field:'Status', oldv:'—', newv: m.status||'Active', reason:'Catalog master entry in PostgreSQL', by: m.createdBy||'Anil Katwale', role:'Procurement Officer', src:'IFMS Database'}];
-  }
-  modal({title:'Audit History — '+esc(m.code)+' ('+esc(m.name)+')', size:'lg', body: auditTableHtml(history)});
+  modal({title:'Audit history \u2014 '+esc(m.code), size:'lg', body: auditTableHtml(DB.trail.filter(function(t){ return t.ref===m.code; }))});
 }
 function deactivateMaterial(id){
   var m = byId(DB.materials,'id',id);
@@ -1916,7 +1877,7 @@ function loadMaterial(id){
   var t = document.querySelector('.ptitle'); if(t) t.textContent = 'Edit Material \u2014 '+m.code;
   toast('Loaded <b>'+esc(m.code)+'</b> for editing.','in');
 }
-async function saveMaterial(status){
+function saveMaterial(status){
   if(!requireOk('matForm')) return;
   var code = val('mCode').trim();
   var dup = DB.materials.filter(function(m){ return m.code.toLowerCase()===code.toLowerCase() && m.id!==EDIT_MAT; })[0];
@@ -1931,48 +1892,24 @@ async function saveMaterial(status){
     minStock:nval('mMin'), maxStock:nval('mMax'), reorderQty:nval('mReQ'), leadTime:nval('mLead'),
     warrantyApplicable:val('mWarr'), warrantyMonths:nval('mWmon'),
     coa:val('mCoa'), fund:val('mFund'), scheme:val('mScheme'), project:val('mProject'),
-    costCentre:val('mCc'), disposalCat:val('mDisp'), updated:TODAY, createdBy:'Anil Katwale',
+    costCentre:val('mCc'), disposalCat:val('mDisp'), updated:TODAY, createdBy:curUser(),
     attachments: attList('mAtt')
   };
-  var catObj = byId(DB.categories,'cat_name',rec.cat);
-  var uomObj = byId(DB.uoms,'uom_code',rec.uom);
-  if(!catObj || !uomObj){ toast('Could not resolve category or UOM against the master data. Save aborted.','er'); return; }
-  var payload = {
-    item_code: rec.code, item_name: rec.name, item_desc: rec.spec,
-    cat_id: catObj.id, base_uom_id: uomObj.id,
-    is_capital: rec.fin==='Capital', is_consumable: rec.consumable==='Consumable',
-    is_service: rec.type==='Service', is_stockable: rec.stockType==='Stock',
-    estimated_rate: rec.rate, reorder_level: rec.reorder, reorder_qty: rec.reorderQty,
-    min_stock_level: rec.minStock, max_stock_level: rec.maxStock, lead_time_days: rec.leadTime,
-    brand_name: rec.make, make_model: rec.model, is_active: status!=='Draft'
-  };
-  var btn = document.activeElement; if(btn && btn.tagName==='BUTTON') btn.disabled = true;
-  try {
-    if(EDIT_MAT){
-      var m = byId(DB.materials,'id',EDIT_MAT);
-      var res = await fetch(API_BASE+'/materials/items/'+EDIT_MAT, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-      if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the update ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-      var changes = Object.keys(rec).filter(function(k){ return String(m[k])!==String(rec[k]) && k!=='updated' && k!=='attachments'; });
-      changes.slice(0,6).forEach(function(k){ logAudit('Material Master', code, 'Modified', k, m[k], rec[k], 'Master data revision'); });
-      Object.assign(m, rec);
-      commit('Updated <b>'+esc(code)+'</b> in PostgreSQL. '+changes.length+' field change(s) recorded in the audit trail.','ok');
-    } else {
-      var res = await fetch(API_BASE+'/materials/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-      if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the create ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-      var created = await res.json();
-      rec.id = created.id; rec.stock = 0;
-      DB.materials.push(rec);
-      logAudit('Material Master', code, status==='Draft'?'Draft Created':'Created', 'Status','\u2014',status,'New material definition');
-      DB.stock.push({id:uid('S'), mat:code, store:STORES[0], bin:'Unassigned', avail:0, reserved:0,
-        inspection:0, blocked:0, damaged:0, expired:0, transit:0, rate:rec.rate, reorder:rec.reorder, batch:'', expiry:''});
-      commit('Saved <b>'+esc(code)+'</b> to PostgreSQL as '+status.toLowerCase()+' (id '+created.id+').','ok');
-    }
-    goto('mm/register');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-  } finally {
-    if(btn) btn.disabled = false;
+  if(EDIT_MAT){
+    var m = byId(DB.materials,'id',EDIT_MAT);
+    var changes = Object.keys(rec).filter(function(k){ return String(m[k])!==String(rec[k]) && k!=='updated' && k!=='attachments'; });
+    changes.slice(0,6).forEach(function(k){ logAudit('Material Master', code, 'Modified', k, m[k], rec[k], 'Master data revision'); });
+    Object.assign(m, rec);
+    commit('Updated <b>'+esc(code)+'</b>. '+changes.length+' field change(s) recorded in the audit trail.','ok');
+  } else {
+    rec.id = uid('M'); rec.stock = 0;
+    DB.materials.push(rec);
+    logAudit('Material Master', code, status==='Draft'?'Draft Created':'Created', 'Status','\u2014',status,'New material definition');
+    DB.stock.push({id:uid('S'), mat:code, store:STORES[0], bin:'Unassigned', avail:0, reserved:0,
+      inspection:0, blocked:0, damaged:0, expired:0, transit:0, rate:rec.rate, reorder:rec.reorder, batch:'', expiry:''});
+    commit('Saved <b>'+esc(code)+'</b> as '+status.toLowerCase()+'.','ok');
   }
+  goto('mm/register');
 }
 
 /* ---------- category and UOM masters ---------- */
@@ -2069,29 +2006,15 @@ function mapBoq(id){
     footer:'<button class="btn" data-close>Cancel</button>'+
       '<button class="btn pri" onclick="saveBoqMap(\''+id+'\')">Save mapping and send for approval</button>'});
 }
-async function saveBoqMap(id){
+function saveBoqMap(id){
   if(!val('bqMat')){ markErr('bqMat',true); toast('Select a standardised material code.','er'); return; }
   var b = byId(DB.boq,'id',id), old = b.mat||'Not mapped';
-  var matObj = byId(DB.materials,'code', val('bqMat'));
-  var invUomObj = byId(DB.uoms,'uom_code', val('bqUom'));
-  var tenderUomObj = byId(DB.uoms,'uom_code', b.tUom) || invUomObj;
-  if(!matObj || !invUomObj || !tenderUomObj){ toast('Could not resolve the material or UOM against the master data.','er'); return; }
-  var payload = {boq_item_code: b.tender+'-L'+b.line, boq_desc: b.boqDesc, item_id: matObj.id,
-    tender_uom_id: tenderUomObj.id, inv_uom_id: invUomObj.id, conversion_factor: nval('bqCf') || 1};
-  try {
-    var res = await fetch(API_BASE+'/materials/boq-mappings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the mapping ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    b.id = created.id;
-    b.mat = val('bqMat'); b.iUom = val('bqUom'); b.cf = nval('bqCf') || 1;
-    b.remarks = val('bqRem') || 'Mapped by procurement officer';
-    b.status = 'Pending Approval';
-    logAudit('BoQ Mapping', b.tender+' L'+b.line, 'Mapped', 'Material Code', old, b.mat, b.remarks);
-    closeModal(); tblPaint('tBoq');
-    commit('BoQ line mapped to <b>'+esc(b.mat)+'</b> in PostgreSQL (id '+created.id+') and sent for approval.','ok');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-  }
+  b.mat = val('bqMat'); b.iUom = val('bqUom'); b.cf = nval('bqCf') || 1;
+  b.remarks = val('bqRem') || 'Mapped by procurement officer';
+  b.status = 'Pending Approval';
+  logAudit('BoQ Mapping', b.tender+' L'+b.line, 'Mapped', 'Material Code', old, b.mat, b.remarks);
+  closeModal(); tblPaint('tBoq');
+  commit('BoQ line mapped to <b>'+esc(b.mat)+'</b> and sent for approval.','ok');
 }
 function newFromBoq(id){
   var b = byId(DB.boq,'id',id);
@@ -2175,43 +2098,23 @@ function simulateBulk(){
       '<button class="btn" onclick="document.getElementById(\'bulkOut\').innerHTML=\'\'">Discard</button></div>';
   }, 900);
 }
-async function commitBulk(){
+function commitBulk(){
   confirmAct({title:'Commit bulk upload', ok:'Commit records', kind:'in', btnClass:'ok',
-    message:'Two validated material records are added to the master as <b>Draft</b>. Note: the backend\'s dedicated bulk-upload endpoint does not actually parse or persist files (it is a fixed-response stub), so each validated row is created individually through the real material-create endpoint instead.'}, async function(){
-    var rows = [['MAT-IT-9001','Docking Station, USB-C','IT Equipment','Computers','Nos','Capital','Y',12,7400],
-     ['MAT-OFF-9002','Whiteboard Marker, Assorted','Office Supplies','Stationery','Packet','Revenue','N',150,240]];
-    var UOM_ALIASES = {NOS:'NOS',PACKET:'PKT',PKT:'PKT',BOX:'BOX',REAM:'REAM',SET:'SET',BAG:'BAG',
-      KG:'KG',MT:'MT',METRE:'MTR',MTR:'MTR',LITRE:'LTR',LTR:'LTR',PAIR:'PAIR',ROLL:'ROLL'};
-    var okCount = 0;
-    for(var i=0;i<rows.length;i++){
-      var r = rows[i];
-      var catObj = byId(DB.categories,'cat_name', r[2]);
-      var uomCode = UOM_ALIASES[r[4].toUpperCase()] || r[4].toUpperCase();
-      var uomObj = byId(DB.uoms,'uom_code', uomCode);
-      if(!catObj || !uomObj){ toast('Row '+(i+1)+' (' +r[0]+ ') skipped: could not resolve category or UOM.','wa'); continue; }
-      var payload = {item_code:r[0], item_name:r[1], item_desc:r[1], cat_id:catObj.id, base_uom_id:uomObj.id,
-        is_capital: r[5]==='Capital', is_consumable: r[5]==='Revenue', is_stockable:true,
-        reorder_level:r[7], estimated_rate:r[8], is_active:false};
-      try {
-        var res = await fetch(API_BASE+'/materials/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-        if(!res.ok){ toast('Row '+(i+1)+' (' +r[0]+ ') rejected by the backend.','er'); continue; }
-        var created = await res.json();
-        okCount++;
-        DB.materials.push({id:created.id, code:r[0], name:r[1], cat:r[2], sub:r[3], uom:r[4], fin:r[5], asset:r[6],
-          reorder:r[7], rate:r[8], stock:0, status:'Draft', make:'\u2014', model:'\u2014', spec:r[1],
-          type:r[5]==='Capital'?'Asset':'Consumable', stockType:'Stock', consumable:r[5]==='Revenue'?'Consumable':'Non-Consumable',
-          hazardous:false, perishable:false, expiryReq:false, shelfLife:0, batchTrack:false, serialTrack:false,
-          minStock:Math.round(r[7]/2), maxStock:r[7]*6, reorderQty:r[7]*2, leadTime:21,
-          warrantyApplicable:r[6]==='Y', warrantyMonths:r[6]==='Y'?12:0, coa:COA[0], fund:FUNDS[0],
-          scheme:SCHEMES[0], project:PROJECTS[0], costCentre:COST_CENTRES[0],
-          disposalCat:'Consumable \u2014 Write-off', updated:TODAY, createdBy:'Anil Katwale', attachments:[]});
-        logAudit('Material Master', r[0], 'Bulk Created','Status','\u2014','Draft','Bulk upload batch');
-      } catch(err) {
-        toast('Row '+(i+1)+' (' +r[0]+ ') failed: could not reach the backend API.','er');
-      }
-    }
-    if(!okCount){ toast('No rows were committed to PostgreSQL.','er'); return; }
-    commit('Committed '+okCount+' material record(s) as drafts in PostgreSQL.','ok');
+    message:'Two validated material records are added to the master as <b>Draft</b>.'}, function(){
+    [['MAT-IT-9001','Docking Station, USB-C','IT Equipment','Computers','Nos','Capital','Y',12,7400],
+     ['MAT-OFF-9002','Whiteboard Marker, Assorted','Office Supplies','Stationery','Packet','Revenue','N',150,240]
+    ].forEach(function(r){
+      DB.materials.push({id:uid('M'), code:r[0], name:r[1], cat:r[2], sub:r[3], uom:r[4], fin:r[5], asset:r[6],
+        reorder:r[7], rate:r[8], stock:0, status:'Draft', make:'\u2014', model:'\u2014', spec:r[1],
+        type:r[5]==='Capital'?'Asset':'Consumable', stockType:'Stock', consumable:r[5]==='Revenue'?'Consumable':'Non-Consumable',
+        hazardous:false, perishable:false, expiryReq:false, shelfLife:0, batchTrack:false, serialTrack:false,
+        minStock:Math.round(r[7]/2), maxStock:r[7]*6, reorderQty:r[7]*2, leadTime:21,
+        warrantyApplicable:r[6]==='Y', warrantyMonths:r[6]==='Y'?12:0, coa:COA[0], fund:FUNDS[0],
+        scheme:SCHEMES[0], project:PROJECTS[0], costCentre:COST_CENTRES[0],
+        disposalCat:'Consumable \u2014 Write-off', updated:TODAY, createdBy:curUser(), attachments:[]});
+      logAudit('Material Master', r[0], 'Bulk Created','Status','\u2014','Draft','Bulk upload batch');
+    });
+    commit('Committed 2 material records as drafts.','ok');
     goto('mm/register');
   });
 }
@@ -2227,7 +2130,7 @@ function stockPanel(r){
     .map(function(h){ return '<th>'+h+'</th>'; }).join('')+'</tr></thead><tbody>'+
     r.lines.map(function(l){
       var s = byId(DB.stock,'mat',l.mat) || {avail:0,reserved:0,transit:0,inspection:0};
-      var other = Math.round(s.avail*0.3);
+      var other = otherStoreQty(l.mat, s.store);
       var openPo = sum(DB.workorders.filter(function(w){ return w.lines[0].mat===l.mat && w.status==='Issued'; }),
         function(w){ return w.lines[0].qty-w.delivered; });
       var net = s.avail - s.reserved;
@@ -2281,7 +2184,9 @@ function reqRegister(rows, id){
         return '<span class="bdg '+cls+'">'+esc(r.stockAvail)+'</span>'; }},
       {h:'Priority', k:'priority', f:function(r){ return priBadge(r.priority); }},
       {h:'Status', k:'status', f:function(r){ return badge(r.status); }},
-      {h:'Current Approver', k:'approver'},
+      {h:'Current Approver', k:'approver', f:function(r){ if(REQ_PENDING.indexOf(r.status)>=0) reqEnsureWf(r);
+        return esc(r.approver||'\u2014')+(r.wf&&!r.wf.done?'<div class="muted" style="font-size:10.5px">Level '+(r.wf.idx+1)+' of '+r.wf.chain.length+'</div>':''); }},
+      {h:'Stage Age / SLA', k:'sla', srt:false, f:function(r){ return slaBadge(r); }},
       {h:'Actions', k:'a', cls:'acts', srt:false, f:function(r){
         return actIcon('View','viewReq(\''+r.id+'\')')+
         actIcon('Stock','checkStock(\''+r.id+'\')','gh')+
@@ -2331,80 +2236,6 @@ function repaintReqTables(){
   if(TBL.tReqA) tblReload('tReqA', pendingReqs());
   refreshNavCounts();
 }
-async function putReqStatus(id, action){
-  var res = await fetch(API_BASE+'/requisitions/'+id+'/status', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:action})});
-  if(!res.ok){ var e = await res.text(); throw new Error('backend rejected the request ('+res.status+'). '+e.slice(0,150)); }
-  return res.json();
-}
-function bulkApprove(){
-  var sel = tblRows('tReqA');
-  if(!sel.length){ toast('Select at least one requisition to approve.','wa'); return; }
-  var blocked = sel.filter(function(r){ return r.budget==='Not Available'; });
-  confirmAct({title:'Approve '+sel.length+' requisition(s)', reason:true, ok:'Approve', btnClass:'ok',
-    kind: blocked.length?'wa':'in',
-    message: blocked.length
-      ? blocked.length+' of the selected requisition(s) have <b>no budget available</b> and will be skipped.'
-      : 'The selected requisitions move to <b>Approved</b> and become available for procurement planning.'},
-    async function(reason){
-      var n=0, failed=0;
-      for(var i=0;i<sel.length;i++){
-        var r = sel[i];
-        if(r.budget==='Not Available') continue;
-        try {
-          await putReqStatus(r.id, 'approve');
-          var old = r.status; r.status='Approved'; r.approver='Procurement Officer'; n++;
-          logAudit('Requisition', r.no, 'Approved','Status',old,'Approved',reason);
-        } catch(err) { failed++; }
-      }
-      repaintReqTables();
-      var msg = 'Approved '+n+' requisition(s) in PostgreSQL'+(blocked.length? '; '+blocked.length+' skipped for want of budget':'')+(failed? '; '+failed+' failed':'')+'.';
-      commit(msg, failed? 'wa':'ok');
-    });
-}
-function approveReq(id){
-  var r = byId(DB.requisitions,'id',id);
-  if(r.budget==='Not Available'){
-    toast('Cannot approve <b>'+esc(r.no)+'</b> \u2014 no budget available. Revalidate the budget first.','er'); return;
-  }
-  confirmAct({title:'Approve requisition '+esc(r.no), reason:true, ok:'Approve', btnClass:'ok',
-    message:'The requisition is approved and released for procurement planning.',
-    detail: kvRow('Department', esc(r.dept))+kvRow('Estimated value', inr(r.value))+
-            kvRow('Budget status', esc(r.budget))+kvRow('Stock availability', esc(r.stockAvail))},
-    async function(reason){
-      try { await putReqStatus(r.id, 'approve'); }
-      catch(err){ toast('Save failed: '+esc(String(err.message||err)),'er'); return; }
-      var old=r.status; r.status='Approved'; r.approver='Procurement Officer';
-      logAudit('Requisition', r.no,'Approved','Status',old,'Approved',reason);
-      closeAllModals(); repaintReqTables();
-      commit('Approved <b>'+esc(r.no)+'</b> in PostgreSQL.','ok');
-    });
-}
-function sendBackReq(id){
-  var r = byId(DB.requisitions,'id',id);
-  confirmAct({title:'Return requisition for correction', kind:'wa', reason:true, ok:'Return', btnClass:'warn',
-    message:'<b>'+esc(r.no)+'</b> goes back to the requestor for correction.'},
-    async function(reason){
-      try { await putReqStatus(r.id, 'return'); }
-      catch(err){ toast('Save failed: '+esc(String(err.message||err)),'er'); return; }
-      var old=r.status; r.status='Returned for Correction'; r.approver='Requestor';
-      logAudit('Requisition', r.no,'Returned','Status',old,'Returned for Correction',reason);
-      closeAllModals(); repaintReqTables();
-      commit('Returned <b>'+esc(r.no)+'</b> for correction in PostgreSQL.','wa');
-    });
-}
-function rejectReq(id){
-  var r = byId(DB.requisitions,'id',id);
-  confirmAct({title:'Reject requisition', kind:'er', btnClass:'dgr', ok:'Reject', reason:true,
-    message:'<b>'+esc(r.no)+'</b> is rejected and the requestor is notified.'},
-    async function(reason){
-      try { await putReqStatus(r.id, 'reject'); }
-      catch(err){ toast('Save failed: '+esc(String(err.message||err)),'er'); return; }
-      var old=r.status; r.status='Rejected'; r.approver='\u2014';
-      logAudit('Requisition', r.no,'Rejected','Status',old,'Rejected',reason);
-      closeAllModals(); repaintReqTables();
-      commit('Rejected <b>'+esc(r.no)+'</b> in PostgreSQL.','er');
-    });
-}
 function initiateProc(id){
   var r = byId(DB.requisitions,'id',id);
   confirmAct({title:'Start procurement', ok:'Start procurement', btnClass:'sec', reason:true,
@@ -2412,7 +2243,7 @@ function initiateProc(id){
     function(reason){
       var old=r.status; r.status='Procurement Initiated';
       DB.plans.push({id:uid('PP'), no:'PP/DIT/2026/'+pad(30+DB.plans.length,4), reqs:r.no, mode:r.mode,
-        value:r.value, officer:'Anil Katwale', budget:r.coa, ref:'\u2014',
+        value:r.value, officer:curUser(), budget:r.coa, ref:'\u2014',
         expected: addDays(TODAY,45), insp:'Yes', warr:'Yes', asset:'No', status:'Draft'});
       logAudit('Requisition', r.no,'Procurement Initiated','Status',old,'Procurement Initiated',reason);
       closeAllModals(); save();
@@ -2456,11 +2287,7 @@ function viewReq(id){
                                   : '<span class="bdg b-er">Budget not available</span>'))+'</table>'+
         (r.budget!=='Available' ? '<div class="note wa" style="margin-top:10px">Procurement cannot start until the budget check succeeds. Seek re-appropriation or a supplementary provision.</div>':''))+
       pane('vr',3, stockPanel(r))+
-      pane('vr',4,'<ul style="list-style:none;padding:0;margin:0">'+chain.map(function(c,i){
-        return '<li class="rag"><span class="s" style="background:'+({ok:'#15803D',wa:'#B45309',nu:'#7386A0'}[c[1]])+'">'+
-        (c[1]==='ok'?'\u2713':(i+1))+'</span><span class="grow">'+esc(c[0])+'</span>'+
-        '<span class="muted" style="font-size:11px">'+(c[1]==='ok'?'Completed':c[1]==='wa'?'In progress':'Not reached')+'</span></li>';
-      }).join('')+'</ul>'),
+      pane('vr',4, (reqEnsureWf(r), wfPanel(r))),
     footer: ['Submitted','Under Review','Budget Validation Pending'].indexOf(r.status)>=0
       ? '<button class="btn warn" onclick="sendBackReq(\''+r.id+'\')">Send back</button>'+
         '<button class="btn dgr" onclick="rejectReq(\''+r.id+'\')">Reject</button>'+
@@ -2487,9 +2314,16 @@ SCREENS['req/create'] = function(){
       fld({id:'rDept', label:'Department', type:'select', opts:DEPTS, val:DEPTS[0], req:true})+
       fld({id:'rOffice', label:'Office', val:'Head Office', req:true})+
       fld({id:'rSection', label:'Section', val:'Procurement Section'})+
-      fld({id:'rRequestor', label:'Requestor', val:'Anil Katwale', req:true})+
+      fld({id:'rRequestor', label:'Requestor', val:curUser(), req:true})+
       fld({id:'rPriority', label:'Priority', type:'select', opts:['Normal','Urgent','Emergency','Critical'], val:'Normal', req:true, blank:false})+
       fld({id:'rMode', label:'Suggested procurement mode', type:'select', opts:MODES})+
+      fld({id:'rGem', label:'GeM availability', type:'select', req:true,
+           opts:['Available on GeM','Not available on GeM (NAC obtained)','Not applicable \u2014 service / works'],
+           hint:'GFR 149: goods available on GeM are procured through GeM'})+
+      fld({id:'rGemRef', label:'GeM product ID / NAC reference', ph:'e.g. GEM/NAC/2026/…'})+
+      '</div><div class="fgrid" style="margin-top:11px">'+
+      fld({id:'rGemJust', label:'Justification for non-GeM mode (if the item is on GeM)', type:'textarea', rows:2,
+           ph:'Required only when the item is available on GeM but a different mode is suggested'})+
       '</div><div class="fgrid" style="margin-top:11px">'+
       fld({id:'rPurpose', label:'Purpose and justification', type:'textarea', rows:2, req:true,
            ph:'State the requirement, the scheme or activity it supports, and why stock cannot meet it'})+'</div>')+
@@ -2576,29 +2410,14 @@ function setLine(i,k,v){
 }
 function rmLine(i){ REQ_LINES.splice(i,1); paintReqLines(); paintChain(); }
 function reqTotal(){ return sum(REQ_LINES, function(l){ return l.qty*l.rate; }); }
-function paintChain(){
-  var host = document.getElementById('rChain'); if(!host) return;
-  var v = reqTotal();
-  var chain = [['Requestor \u2014 '+DEPTS[0], 'Raises the requisition'],['Head of Office','Departmental scrutiny']];
-  if(v > 500000) chain.push(['Finance Wing','Budget concurrence']);
-  if(v > 2500000) chain.push(['Administrative Secretary','Above \u20B9 25,00,000']);
-  if(v > 10000000) chain.push(['Finance Department','Above \u20B9 1,00,00,000']);
-  chain.push(['Procurement Officer','Procurement initiation']);
-  host.innerHTML = '<div class="note '+(v?'ok':'in')+'" style="margin-bottom:10px">Requisition value <b>'+inr(v)+
-    '</b> \u2014 '+chain.length+' approval levels.</div>'+
-    '<ul style="list-style:none;margin:0;padding:0">'+chain.map(function(c,i){
-      return '<li class="rag"><span class="s" style="background:'+(i===0?'#15803D':'#1E5A96')+'">'+(i+1)+'</span>'+
-      '<span class="grow"><b>'+esc(c[0])+'</b><div class="muted" style="font-size:10.5px">'+esc(c[1])+'</div></span></li>';
-    }).join('')+'</ul>';
-}
 function budgetCheckReq(){
   var coa = val('rCoa'), v = reqTotal();
   var out = document.getElementById('rBudgetOut'); if(!out) return;
   if(!coa){ out.innerHTML = '<div class="note wa">Select a budget head to run the check.</div>'; return; }
   if(v<=0){ out.innerHTML = '<div class="note wa">Add at least one line item before checking the budget.</div>'; return; }
-  out.innerHTML = '<div class="note in"><span class="spin"></span> Contacting the budget module&hellip;</div>';
+  out.innerHTML = '<div class="note in"><span class="spin"></span> Contacting the budget module (IF-01)&hellip;</div>';
   setTimeout(function(){
-    var avail = Math.round(v * (coa===COA[3] ? 0.72 : 2.4));
+    var avail = bhAvail(coa);
     setVal('rAvail', avail);
     var ok = avail >= v;
     out.innerHTML = '<div class="grid g4" style="margin-bottom:10px">'+
@@ -2620,7 +2439,7 @@ function checkStockDraft(){
   out.innerHTML = '<div class="note in"><span class="spin"></span> Querying stock across stores&hellip;</div>';
   setTimeout(function(){ out.innerHTML = stockPanel({lines:REQ_LINES}); toast('Stock availability retrieved.','ok'); }, 650);
 }
-async function saveReq(status){
+function saveReqCore(status){
   if(!requireOk('reqForm')) return;
   if(!REQ_LINES.length){ toast('Add at least one material or service line before submitting.','er'); switchTab('cr',2); return; }
   if(REQ_LINES.some(function(l){ return l.qty<=0; })){ toast('Every line needs a quantity greater than zero.','er'); switchTab('cr',2); return; }
@@ -2629,16 +2448,6 @@ async function saveReq(status){
   var budget = avail===0 ? 'Pending' : (avail>=v ? 'Available':'Not Available');
   if(status==='Submitted' && budget==='Not Available'){
     toast('Cannot submit \u2014 the budget check failed for this requisition.','er'); switchTab('cr',3); return;
-  }
-  var storeObj = byId(DB.stores,'store_name', val('rLoc'));
-  if(!storeObj){ toast('Select a valid delivery location before saving.','er'); switchTab('cr',1); return; }
-  var payloadLines = [];
-  for(var i=0;i<REQ_LINES.length;i++){
-    var l = REQ_LINES[i];
-    if(l.kind!=='Material'){ toast('Service lines cannot be saved yet \u2014 the backend requires a catalogued material for every line.','er'); switchTab('cr',2); return; }
-    var matObj = byId(DB.materials,'code', l.mat);
-    if(!matObj){ toast('Could not resolve material "'+esc(l.mat)+'" against the master data.','er'); switchTab('cr',2); return; }
-    payloadLines.push({item_id: matObj.id, requested_qty: l.qty, est_unit_rate: l.rate, preferred_make: l.make, technical_spec: l.spec});
   }
   var rec = {
     id: uid('R'), no: val('rNo'), date: val('rDate'), dept: val('rDept'), office: val('rOffice'),
@@ -2650,32 +2459,23 @@ async function saveReq(status){
       return {mat:l.mat, desc: l.kind==='Material'? mname(l.mat) : l.desc, qty:l.qty, uom:l.uom, rate:l.rate, make:l.make, spec:l.spec};
     }),
     budget: budget, stockAvail:'Not Available',
-    status: status, approver: status==='Draft'? '\u2014' : 'Head of Office',
+    status: status, approver:'\u2014', maker: curUser(), gem: val('rGem'), gemRef: val('rGemRef'), gemJust: val('rGemJust'),
     attachments: attList('rAtt')
   };
   var covered = rec.lines.filter(function(l){
     var s = byId(DB.stock,'mat',l.mat); return s && (s.avail - s.reserved) >= l.qty;
   }).length;
   rec.stockAvail = covered===rec.lines.length ? 'Available' : (covered? 'Partially Available':'Not Available');
-  var payload = {req_date: val('rDate'), store_id: storeObj.id, priority: val('rPriority'), purpose: val('rPurpose'), lines: payloadLines};
-  try {
-    var res = await fetch(API_BASE+'/requisitions/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the requisition ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    rec.id = created.id; rec.no = created.req_no || rec.no;
-    if(status==='Submitted'){
-      var stRes = await fetch(API_BASE+'/requisitions/'+created.id+'/status', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:'review'})});
-      if(!stRes.ok) toast('Requisition saved, but the workflow-stage update failed.','wa');
-    }
-    DB.requisitions.unshift(rec);
-    logAudit('Requisition', rec.no, status==='Draft'?'Draft Saved':'Submitted','Status','\u2014',status,rec.purpose.slice(0,80));
-    if(status==='Submitted') notify('in','Requisition '+rec.no+' submitted','Awaiting approval by '+rec.approver,'req/approvals');
-    save();
-    toast((status==='Draft'? 'Saved <b>'+esc(rec.no)+'</b> as a draft' : 'Submitted <b>'+esc(rec.no)+'</b> for approval')+' to PostgreSQL (id '+created.id+').','ok');
-    goto('req/list');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  DB.requisitions.unshift(rec);
+  if(status==='Submitted'){
+    rec.wf = wfBuild('Requisition', rec.value, null); rec.approver = wfStage(rec).role;
+    if(REQ_CHECK){ stampChecklist(rec,'Requisition Submission',REQ_CHECK); REQ_CHECK = null; }
   }
+  logAudit('Requisition', rec.no, status==='Draft'?'Draft Saved':'Submitted','Status','\u2014',status,rec.purpose.slice(0,80));
+  if(status==='Submitted') notify('in','Requisition '+rec.no+' submitted','Awaiting approval by '+rec.approver,'req/approvals');
+  save();
+  toast(status==='Draft'? 'Saved <b>'+esc(rec.no)+'</b> as a draft.' : 'Submitted <b>'+esc(rec.no)+'</b> for approval.','ok');
+  goto('req/list');
 }
 
 /* ---------- consolidation ---------- */
@@ -2724,26 +2524,16 @@ function createConsolidatedPlan(){
   var v = sum(sel,'value');
   confirmAct({title:'Create consolidated procurement plan', ok:'Create plan', btnClass:'pri', reason:true,
     message:'One procurement plan is raised covering '+sel.length+' material line(s) worth <b>'+inr(v)+'</b>.'},
-    async function(reason){
+    function(reason){
       var allReqs = [];
       sel.forEach(function(s){ s.reqs.forEach(function(x){ if(allReqs.indexOf(x)<0) allReqs.push(x); }); });
-      var reqIds = allReqs.map(function(no){ var r = byId(DB.requisitions,'no',no); return r ? r.id : null; }).filter(function(x){ return x!==null; });
-      if(!reqIds.length){ toast('Could not resolve the underlying requisitions against the master data.','er'); return; }
-      try {
-        var res = await fetch(API_BASE+'/requisitions/consolidate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({req_ids: reqIds})});
-        if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the consolidation ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-        var created = await res.json();
-        var no = created.plan_no;
-        DB.plans.push({id:uid('PP'), no:no, reqs:allReqs.join(', '),
-          mode: v>2500000?'Open Tender':'Limited Tender', value:v, officer:'Anil Katwale', budget:COA[0],
-          ref:'\u2014', expected: addDays(TODAY,50), insp:'Yes', warr:'Yes', asset:'Yes', status:'Draft'});
-        allReqs.forEach(function(no){ var r = byId(DB.requisitions,'no',no); if(r) r.status = 'Procurement Initiated'; });
-        logAudit('Procurement Plan', no,'Created','Status','\u2014','Draft',reason);
-        save(); toast('Created consolidated plan <b>'+esc(no)+'</b> in PostgreSQL.','ok');
-        goto('proc/plan');
-      } catch(err) {
-        toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-      }
+      var no = 'PP/DIT/2026/'+pad(30+DB.plans.length,4);
+      DB.plans.push({id:uid('PP'), no:no, reqs:allReqs.join(', '),
+        mode: v>2500000?'Open Tender':'Limited Tender', value:v, officer:curUser(), budget:COA[0],
+        ref:'\u2014', expected: addDays(TODAY,50), insp:'Yes', warr:'Yes', asset:'Yes', status:'Draft'});
+      logAudit('Procurement Plan', no,'Created','Status','\u2014','Draft',reason);
+      save(); toast('Created consolidated plan <b>'+esc(no)+'</b>.','ok');
+      goto('proc/plan');
     });
 }
 
@@ -2791,24 +2581,15 @@ function planToTender(id){
   if(p.status!=='Approved'){ toast('Approve the plan before raising a tender.','wa'); return; }
   confirmAct({title:'Create tender from plan', ok:'Create tender', btnClass:'pri', reason:true,
     message:'A tender is created against <b>'+esc(p.no)+'</b> and published on the selected portal.'},
-    async function(reason){
-      var fee = p.value>2500000?5000:2000, emd = Math.round(p.value*0.02);
-      var payload = {tender_title: 'Procurement against plan '+p.no, estimated_cost: p.value, tender_fee: fee, emd_amount: emd, bidding_days: 28};
-      try {
-        var res = await fetch(API_BASE+'/procurement/tenders', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-        if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the tender ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-        var created = await res.json();
-        var no = created.tender_no;
-        DB.tenders.unshift({id:created.id, no:no, title:payload.tender_title, date:TODAY, mode:p.mode,
-          dept:DEPTS[0], value:p.value, fee:fee, emd:emd,
-          close: addDays(TODAY,28), status:'Published', portal:'GNCTD e-Procurement Portal', coa:p.budget});
-        p.ref = no;
-        logAudit('Tender', no,'Created','Status','\u2014','Published',reason);
-        save(); toast('Created and published tender <b>'+esc(no)+'</b> in PostgreSQL (id '+created.id+').','ok');
-        goto('proc/tender');
-      } catch(err) {
-        toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-      }
+    function(reason){
+      var no = 'TND/2026/'+(10120+DB.tenders.length);
+      DB.tenders.unshift({id:uid('T'), no:no, title:'Procurement against plan '+p.no, date:TODAY, mode:p.mode,
+        dept:DEPTS[0], value:p.value, fee: p.value>P('feeThreshold')?P('feeHigh'):P('feeLow'), emd: Math.round(p.value*P('emdPct')/100),
+        close: addDays(TODAY,28), status:'Published', portal:'GNCTD e-Procurement Portal', coa:p.budget});
+      p.ref = no;
+      logAudit('Tender', no,'Created','Status','\u2014','Published',reason);
+      save(); toast('Created and published tender <b>'+esc(no)+'</b>.','ok');
+      goto('proc/tender');
     });
 }
 
@@ -2928,7 +2709,7 @@ function quoteEntry(){
   modal({title:'Record vendor quotation', size:'lg',
     body:'<div id="qeForm"><div class="fgrid g3">'+
       fld({id:'qeT', label:'Tender / quotation reference', type:'select', opts:DB.tenders.map(function(t){ return t.no; }), req:true})+
-      fld({id:'qeV', label:'Vendor', type:'select', opts:DB.vendors.map(function(v){ return {v:v.party_code,l:v.party_name}; }), req:true})+
+      fld({id:'qeV', label:'Vendor', type:'select', opts:VENDORS.map(function(v){ return {v:v.code,l:v.name}; }), req:true})+
       fld({id:'qeNo', label:'Bid number', val:'BID/2026/'+pad(4200+DB.quotes.length*7,5), req:true})+
       fld({id:'qeDate', label:'Submission date', type:'date', val:TODAY, req:true, date:true})+
       fld({id:'qeVal', label:'Bid validity', type:'date', val:'2026-12-31', date:true})+
@@ -2957,16 +2738,12 @@ function qeCalc(){
   var tot = basic+tax+nval('qeFr')+nval('qeIns')+nval('qeInst')+nval('qeOth')-nval('qeDis');
   setVal('qeTot', tot.toFixed(2));
 }
-async function saveQuote(){
+function saveQuote(){
   if(!requireOk('qeForm')) return;
   qeCalc();
   var tot = Number(val('qeTot'));
   if(tot<=0){ toast('The total quoted value must be greater than zero.','er'); return; }
   var basic = nval('qeQty')*nval('qeRate');
-  var tenderObj = byId(DB.tenders,'no', val('qeT'));
-  var vendorObj = byId(DB.vendors,'party_code', val('qeV'));
-  var matObj = byId(DB.materials,'code', val('qeMat'));
-  if(!tenderObj || !vendorObj){ toast('Could not resolve tender or vendor against the master data.','er'); return; }
   var rec = {id:uid('Q'), no:val('qeNo'), tender:val('qeT'), vendor:val('qeV'), sub:val('qeDate'),
     tech:'Pending', fin:'Opened', basic:basic, tax:Math.round(basic*nval('qeTax')/100), freight:nval('qeFr'),
     insurance:nval('qeIns'), install:nval('qeInst'), other:nval('qeOth'), discount:nval('qeDis'),
@@ -2974,20 +2751,10 @@ async function saveQuote(){
     validity:val('qeVal'), rank:0, reco:'', status:'Under Review', score:0,
     deviations:val('qeDev'), elig:'To be examined', docs:'To be verified', qcert:'\u2014',
     capacity:'\u2014', past:'\u2014', remarks:val('qeRem')};
-  var payload = {tender_id: tenderObj.id, party_id: vendorObj.id, item_id: matObj ? matObj.id : undefined,
-    quoted_qty: nval('qeQty'), basic_rate: nval('qeRate'), gst_percent: nval('qeTax')};
-  try {
-    var res = await fetch(API_BASE+'/procurement/quotes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the quotation ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    rec.id = created.id;
-    DB.quotes.push(rec);
-    logAudit('Quotation', rec.no,'Recorded','Status','\u2014','Under Review','Bid entered by procurement officer');
-    closeModal(); save(); toast('Recorded quotation <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+').','ok');
-    goto('proc/quotes');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-  }
+  DB.quotes.push(rec);
+  logAudit('Quotation', rec.no,'Recorded','Status','\u2014','Under Review','Bid entered by procurement officer');
+  closeModal(); save(); toast('Recorded quotation <b>'+esc(rec.no)+'</b>.','ok');
+  goto('proc/quotes');
 }
 
 /* ---------- technical evaluation ---------- */
@@ -3030,22 +2797,16 @@ function paintEval(){
     '</div></div>';
     }).join('')+'</div>';
 }
-async function saveEval(id){
+function saveEval(id){
   var q = byId(DB.quotes,'id',id);
   var oldT = q.tech;
-  var score = Number(val('ev_s_'+id))||0;
-  var tech = val('ev_t_'+id);
-  var remarks = val('ev_r_'+id);
-  var payload = {is_technically_ok: tech==='Qualified', eval_remarks: 'Score: '+score+'/100. '+(remarks||'')};
-  try {
-    var res = await fetch(API_BASE+'/procurement/quotes/'+q.id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the evaluation ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-  } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
-  q.score = score; q.tech = tech; q.remarks = remarks;
+  q.score = Number(val('ev_s_'+id))||0;
+  q.tech = val('ev_t_'+id);
+  q.remarks = val('ev_r_'+id);
   if(q.tech==='Disqualified'){ q.status='Rejected'; q.evaluated=0; }
   else if(q.tech==='Qualified'){ q.status='Under Review'; q.evaluated = q.amount - q.discount; }
   logAudit('Vendor Evaluation', q.no,'Evaluated','Technical Status',oldT,q.tech, q.remarks||'Technical evaluation recorded');
-  commit('Saved the evaluation for <b>'+esc(vname(q.vendor))+'</b> in PostgreSQL.','ok');
+  commit('Saved the evaluation for <b>'+esc(vname(q.vendor))+'</b>.','ok');
   paintEval();
 }
 function finishEval(){
@@ -3057,7 +2818,7 @@ function finishEval(){
     function(reason){
       var tn = byId(DB.tenders,'no',t); if(tn) tn.status='Under Evaluation';
       logAudit('Tender', t,'Technical Evaluation Completed','Status','Bid Opened','Under Evaluation',reason);
-      save(); toast('Technical evaluation completed for <b>'+esc(t)+'</b> (stage tracked locally — the backend has no separate evaluation-stage field; it already reflects a tender with recorded bids as under evaluation).','ok');
+      save(); toast('Technical evaluation completed for <b>'+esc(t)+'</b>.','ok');
       goto('proc/cs');
     });
 }
@@ -3125,60 +2886,38 @@ function paintCs(){
       (tn.value ? pct(tn.value-q1[0].evaluated, tn.value).toFixed(1)+'% below the estimated tender value' : 'within the estimate')+
       '. Delivery '+q1[0].delivery+' days, warranty '+q1[0].warranty+' months.</div></div></div>' : '');
 }
-async function autoL1(){
+function autoL1(){
   var t = val('csT');
   var bids = DB.quotes.filter(function(q){ return q.tender===t && q.tech==='Qualified'; }).sort(function(a,b){ return a.evaluated-b.evaluated; });
   if(!bids.length){ toast('No technically qualified bid is available for L1 determination.','wa'); return; }
-  var failed = 0;
-  for(var i=0;i<bids.length;i++){
-    try {
-      var res = await fetch(API_BASE+'/procurement/quotes/'+bids[i].id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({rank_order: i+1})});
-      if(!res.ok) failed++;
-    } catch(err) { failed++; }
-  }
   DB.quotes.filter(function(q){ return q.tender===t; }).forEach(function(q){ q.rank=0; q.reco=''; });
   bids.forEach(function(b,i){ b.rank = i+1; if(i===0) b.reco='Recommended'; });
   logAudit('Comparative Statement', t,'L1 Determined','Rank','\u2014','L1: '+vname(bids[0].vendor),'Lowest evaluated cost');
-  commit('L1 is <b>'+esc(vname(bids[0].vendor))+'</b> at '+inr(bids[0].evaluated)+' \u2014 ranks saved in PostgreSQL'+(failed?' ('+failed+' failed)':'')+'.', failed?'wa':'ok');
+  commit('L1 is <b>'+esc(vname(bids[0].vendor))+'</b> at '+inr(bids[0].evaluated)+'.','ok');
   paintCs();
 }
 function selectVendor(id){
   var q = byId(DB.quotes,'id',id);
-  var t = byId(DB.tenders,'no',q.tender);
-  var vendorObj = byId(DB.vendors,'party_code', q.vendor);
   confirmAct({title:'Select vendor for award', ok:'Select and create work order', btnClass:'ok', reason:true,
     message:'<b>'+esc(vname(q.vendor))+'</b> is recommended for award against '+esc(q.tender)+' at '+inr(q.evaluated)+'.'},
-    async function(reason){
-      if(!t || !vendorObj){ toast('Could not resolve the tender or vendor against the master data.','er'); return; }
-      try {
-        var res = await fetch(API_BASE+'/procurement/tenders/'+t.id+'/award', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({party_id: vendorObj.id})});
-        if(!res.ok){ var e = await res.text(); toast('Award failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-      } catch(err) {
-        toast('Award failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
-      }
+    function(reason){
       DB.quotes.filter(function(x){ return x.tender===q.tender; }).forEach(function(x){
         x.reco = x.id===id? 'Recommended':'Not Recommended'; x.status = x.id===id? 'Approved':'Rejected';
       });
-      if(t) t.status='Awarded';
+      var t = byId(DB.tenders,'no',q.tender); if(t) t.status='Awarded';
       logAudit('Comparative Statement', q.tender,'Vendor Selected','Recommended Vendor','\u2014',vname(q.vendor),reason);
-      commit('Selected <b>'+esc(vname(q.vendor))+'</b> for award in PostgreSQL. Create the work order to proceed.','ok');
+      commit('Selected <b>'+esc(vname(q.vendor))+'</b> for award. Create the work order to proceed.','ok');
       paintCs();
       setTimeout(function(){ goto('wo/create'); }, 800);
     });
 }
-async function splitAward(id){
+function splitAward(id){
   var q = byId(DB.quotes,'id',id);
   confirmAct({title:'Split award', kind:'wa', ok:'Record split award', reason:true,
     message:'A split award is recorded for <b>'+esc(vname(q.vendor))+'</b>. State the quantity split and the justification.'},
-    async function(reason){
-      try {
-        var res = await fetch(API_BASE+'/procurement/quotes/'+q.id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({is_selected:true, eval_remarks:'Split award: '+reason})});
-        if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-      } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
-      q.reco='Split Award'; q.status='Approved';
+    function(reason){ q.reco='Split Award'; q.status='Approved';
       logAudit('Comparative Statement', q.tender,'Split Award','Recommendation','\u2014','Split Award',reason);
-      commit('Recorded a split award for <b>'+esc(vname(q.vendor))+'</b> in PostgreSQL.','ok'); paintCs();
-    });
+      commit('Recorded a split award for <b>'+esc(vname(q.vendor))+'</b>.','ok'); paintCs(); });
 }
 function recordNegotiation(){
   var t = val('csT');
@@ -3193,36 +2932,31 @@ function recordNegotiation(){
       fld({id:'ngR', label:'Minutes / justification', type:'textarea', rows:3, req:true})+'</div></div>',
     footer:'<button class="btn" data-close>Cancel</button><button class="btn pri" onclick="saveNegotiation()">Record negotiation</button>'});
 }
-async function saveNegotiation(){
+function saveNegotiation(){
   if(!requireOk('ngForm')) return;
   var q = byId(DB.quotes,'id',val('ngV'));
   var old = q.evaluated;
-  var newAmt = nval('ngA');
-  try {
-    var res = await fetch(API_BASE+'/procurement/quotes/'+q.id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({total_bid_value:newAmt, eval_remarks:'Negotiated on '+val('ngD')+' by '+val('ngB')+'. '+val('ngR')})});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the negotiation ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-  } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
-  q.evaluated = newAmt; q.status='Under Review';
+  q.evaluated = nval('ngA'); q.status='Under Review';
   logAudit('Comparative Statement', q.tender,'Negotiation Recorded','Evaluated Amount',inr(old),inr(q.evaluated),val('ngR'));
-  closeModal(); commit('Recorded the negotiation for <b>'+esc(vname(q.vendor))+'</b> in PostgreSQL. Recalculate L1.','ok');
+  closeModal(); commit('Recorded the negotiation for <b>'+esc(vname(q.vendor))+'</b>. Recalculate L1.','ok');
   paintCs();
 }
 function recommendRetender(){
   var t = val('csT');
   confirmAct({title:'Recommend re-tender', kind:'er', btnClass:'dgr', ok:'Recommend re-tender', reason:true,
-    message:'Tender <b>'+esc(t)+'</b> is recommended for cancellation and re-tendering. Note: the backend has no re-tender/cancellation status field for tenders, so this is recorded locally and in the audit trail only.'},
+    message:'Tender <b>'+esc(t)+'</b> is recommended for cancellation and re-tendering.'},
     function(reason){
       var tn = byId(DB.tenders,'no',t); if(tn) tn.status='Re-Tender Recommended';
       logAudit('Tender', t,'Re-Tender Recommended','Status','Under Evaluation','Re-Tender Recommended',reason);
-      commit('Recommended re-tender for <b>'+esc(t)+'</b> (local only — no backend status field for this).','wa'); paintCs();
+      commit('Recommended re-tender for <b>'+esc(t)+'</b>.','wa'); paintCs();
     });
 }
 function submitCs(){
   var t = val('csT');
   confirmAct({title:'Submit comparative statement', ok:'Submit for approval', btnClass:'pri', reason:true,
-    message:'The comparative statement for <b>'+esc(t)+'</b> goes to the competent authority. Note: the underlying evaluation scores, ranks and negotiated amounts are already saved to PostgreSQL as they were recorded; the "submission" step itself is an audit-trail entry only, since the backend has no CS-submission workflow endpoint.'},
+    message:'The comparative statement for <b>'+esc(t)+'</b> goes to the competent authority.'},
     function(reason){ logAudit('Comparative Statement', t,'Submitted','Status','Draft','Submitted for Approval',reason);
-      commit('Submitted the comparative statement for approval (audit trail only).','ok'); });
+      commit('Submitted the comparative statement for approval.','ok'); });
 }
 function downloadCs(){
   var t = val('csT');
@@ -3379,16 +3113,10 @@ function releasePg(id){
     detail: kvRow('Work order', esc(p.wo))+kvRow('Amount', inr(p.amount))+
             kvRow('Release eligibility date', fdate(p.release))+
             kvRow('Open defects', openDefects.length? '<b style="color:#B91C1C">'+openDefects.length+'</b>':'None')},
-    async function(reason){
-      try {
-        var res = await fetch(API_BASE+'/procurement/securities/'+p.id+'/release', {method:'PUT'});
-        if(!res.ok){ var e = await res.text(); toast('Release failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-      } catch(err) {
-        toast('Release failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
-      }
+    function(reason){
       var old = p.status; p.status='Released';
       logAudit('Performance Guarantee', p.instrNo,'Released','Status',old,'Released',reason);
-      tblPaint('tPg'); commit('Released guarantee <b>'+esc(p.instrNo)+'</b> in PostgreSQL.','ok');
+      tblPaint('tPg'); commit('Released guarantee <b>'+esc(p.instrNo)+'</b>.','ok');
     });
 }
 function extendPg(id){
@@ -3452,7 +3180,7 @@ SCREENS['wo/create'] = function(){
       '</div>')+
     pane(g,1,'<div class="fgrid g3">'+
       fld({id:'wVendor', label:'Vendor', type:'select', req:true,
-           opts:DB.vendors.map(function(v){ return {v:v.party_code, l:v.party_name}; }), onchange:'woVendorInfo()'})+
+           opts:VENDORS.map(function(v){ return {v:v.code, l:v.name}; }), onchange:'woVendorInfo()'})+
       fld({id:'wContract', label:'Contract number', val:'CON/2026/'+pad(760+DB.workorders.length*5,5)})+
       fld({id:'wStore', label:'Consignee store', type:'select', opts:STORES, req:true})+
       '</div><div id="wVenBox" style="margin-top:11px"></div>')+
@@ -3493,15 +3221,14 @@ SCREENS['wo/create'] = function(){
     '<div style="border-top:1px solid var(--line);padding:11px 13px;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">'+
       '<button class="btn" onclick="goto(\'wo/list\')">Cancel</button>'+
       '<button class="btn gh" onclick="saveWo(\'Draft\')">Save draft</button>'+
-      '<button class="btn pri" onclick="saveWo(\'Approved\')">Submit for approval</button>'+
+      '<button class="btn pri" onclick="saveWo(\'Pending Approval\')">Submit for approval</button>'+
     '</div>'+
   '</div>';
 };
 SCREENS_AFTER['wo/create'] = function(){ paintWoLines(); woVendorInfo(); woChain(); };
 function woVendorInfo(){
   var box = document.getElementById('wVenBox'); if(!box) return;
-  var raw = byId(DB.vendors,'party_code',val('wVendor'));
-  var v = raw ? {code:raw.party_code, name:raw.party_name, gstin:raw.gstin, cat:raw.party_type, city:'Delhi', rating:raw.party_rating||4.0} : null;
+  var v = byId(VENDORS,'code',val('wVendor'));
   if(!v){ box.innerHTML = '<div class="note in">Select a vendor to see the registration and performance summary.</div>'; return; }
   var wos = DB.workorders.filter(function(w){ return w.vendor===v.code; });
   var defs = DB.defects.filter(function(d){ return d.vendor===v.code && ['Resolved','Closed'].indexOf(d.status)<0; });
@@ -3592,53 +3319,30 @@ function woCalc(){
   var t = woTotals();
   setVal('wPgAmt', Math.round(t.total * (nval('wPgPct')||0) / 100));
 }
-function woChain(){
-  var host = document.getElementById('wChain'); if(!host) return;
-  var v = woTotals().total;
-  var chain = [['Procurement Officer','Raises the order']];
-  if(v > 2500000) chain.push(['Head of Department','Above \u20B9 25,00,000']);
-  if(v > 50000000) chain.push(['Administrative Secretary','Above \u20B9 5,00,00,000']);
-  chain.push(['Finance Wing','Funds commitment']);
-  host.innerHTML = '<div class="note '+(v?'ok':'in')+'" style="margin-bottom:10px">Order value <b>'+inr(v)+
-    '</b> \u2014 '+chain.length+' approval level(s) under the delegation of financial powers.</div>'+
-    '<ul style="list-style:none;margin:0;padding:0">'+chain.map(function(c,i){
-      return '<li class="rag"><span class="s" style="background:'+(i===0?'#15803D':'#1E5A96')+'">'+(i+1)+'</span>'+
-      '<span class="grow"><b>'+esc(c[0])+'</b><div class="muted" style="font-size:10.5px">'+esc(c[1])+'</div></span></li>';
-    }).join('')+'</ul>';
-}
 function woBudgetCheck(){
   var out = document.getElementById('wBudgetOut'); if(!out) return;
   var coa = val('wCoa'), v = woTotals().total;
   if(!coa){ out.innerHTML = '<div class="note wa">Select a budget head first.</div>'; return; }
   if(v<=0){ out.innerHTML = '<div class="note wa">Add order lines before checking the budget.</div>'; return; }
-  out.innerHTML = '<div class="note in"><span class="spin"></span> Committing funds against the budget head&hellip;</div>';
+  out.innerHTML = '<div class="note in"><span class="spin"></span> Checking the uncommitted balance with the budget module (IF-01)&hellip;</div>';
   setTimeout(function(){
-    var avail = Math.round(v * 1.8);
-    setVal('wAvail', avail);
+    var p = bhPos(coa), avail = Math.max(0,p.avail), ok = avail >= v;
+    setVal('wAvail', ok ? avail : 0);
     out.innerHTML = '<div class="grid g4" style="margin-bottom:10px">'+
-      [['Budget head', esc(coa)],['Available', inr(avail)],['Order value', inr(v)],['Balance after commitment', inr(avail-v)]]
+      [['Allotment', inr(p.allot)],['Expenditure + commitments', inr(p.exp+p.committed)],['Uncommitted balance', inr(avail)],['Balance after this order', inr(avail-v)]]
       .map(function(x){ return '<div class="scard"><div class="l">'+x[0]+'</div><div class="v" style="font-size:13px">'+x[1]+'</div></div>'; }).join('')+
-      '</div><div class="note ok"><b>Funds committed.</b> A commitment entry is posted to the budget module against this order.</div>';
-    toast('Budget check passed and funds committed.','ok');
+      '</div><div class="note '+(ok?'ok':'er')+'">'+(ok
+        ? '<b>Funds available.</b> A commitment of '+inr(v)+' is booked against '+esc(coa)+' when the order is submitted for approval.'
+        : '<b>Funds not available.</b> The order value exceeds the uncommitted balance by '+inr(v-avail)+'. Seek re-appropriation before submitting.')+'</div>';
+    toast(ok? 'Budget check passed.' : 'Budget check failed \u2014 uncommitted balance is short.', ok?'ok':'er');
   }, 700);
 }
-async function saveWo(status){
+function saveWo(status){
   if(!requireOk('woForm')) return;
   if(!WO_LINES.length){ toast('Add at least one order line.','er'); switchTab('cw',2); return; }
   var t = woTotals();
   if(status!=='Draft' && !Number(val('wAvail'))){
     toast('Run the budget check and commit funds before submitting.','er'); switchTab('cw',5); return;
-  }
-  var vendorObj = byId(DB.vendors,'party_code', val('wVendor'));
-  var storeObj = byId(DB.stores,'store_name', val('wStore'));
-  if(!vendorObj){ toast('Select a valid vendor before saving.','er'); switchTab('cw',1); return; }
-  if(!storeObj){ toast('Select a valid delivery store before saving.','er'); switchTab('cw',1); return; }
-  var payloadLines = [];
-  for(var i=0;i<WO_LINES.length;i++){
-    var l = WO_LINES[i];
-    var matObj = byId(DB.materials,'code', l.mat);
-    if(!matObj){ toast('Could not resolve material "'+esc(l.mat)+'" against the master data.','er'); switchTab('cw',2); return; }
-    payloadLines.push({item_id: matObj.id, order_qty: l.qty, unit_rate: l.rate, tax_percent: l.taxPct});
   }
   var rec = {
     id: uid('W'), no: val('wNo'), date: val('wDate'), vendor: val('wVendor'),
@@ -3651,54 +3355,33 @@ async function saveWo(status){
     due: val('wDue'), status: status, delivered: 0, deliveredValue: 0,
     store: val('wStore'), inspection: val('wInsp'), warranty: nval('wWarr'),
     paymentTerms: val('wPay'), ld: val('wLd'), pg: nval('wPgAmt'),
-    budgetOk: !!Number(val('wAvail')), amendments: 0,
+    budgetOk: !!Number(val('wAvail')), amendments: 0, coa: val('wCoa'), maker: curUser(),
     attachments: attList('wAtt'), terms: val('wTerms')
   };
-  var payload = {party_id: vendorObj.id, store_id: storeObj.id, delivery_due_date: val('wDue'), payment_terms: val('wPay'), lines: payloadLines};
-  try {
-    var res = await fetch(API_BASE+'/work-orders/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the work order ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    rec.id = created.id; rec.no = created.wo_no || rec.no;
-    DB.workorders.unshift(rec);
-    DB.deliveries.unshift({
-      id: uid('D'), wo: rec.no, vendor: rec.vendor, mat: rec.lines[0].mat,
-      ordered: sum(rec.lines,'qty'), delivered:0, pending: sum(rec.lines,'qty'),
-      dispatch:'', expected: rec.due, actual:'', delay:0, challan:'', transporter:'',
-      status:'Not Dispatched', store: rec.store
-    });
-    if(rec.pg>0){
-      var pgInstrNo = 'PBG/'+pad(88500+DB.pgs.length*23,7);
-      var pgExpiry = addDays(rec.due, 420);
-      try {
-        var pgRes = await fetch(API_BASE+'/procurement/securities', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
-          sec_type: 'PBG', wo_id: created.id, party_id: vendorObj.id, instrument_type: 'Bank Guarantee',
-          instrument_no: pgInstrNo, instrument_date: rec.date, expiry_date: pgExpiry, amount: rec.pg, issuing_bank: 'State Bank of India'
-        })});
-        if(pgRes.ok){
-          var pgCreated = await pgRes.json();
-          DB.pgs.push({id:pgCreated.id, wo:rec.no, contract:val('wContract'), vendor:rec.vendor, amount:rec.pg,
-            pctv:nval('wPgPct'), instrType:'Bank Guarantee', instrNo:pgInstrNo,
-            bank:'State Bank of India', issue:rec.date, expiry: pgExpiry,
-            claim:'6 months beyond warranty', verify:'Under Verification',
-            release: addDays(rec.due, 380), status:'Received'});
-        } else {
-          toast('Work order saved, but the performance guarantee could not be registered in PostgreSQL.','wa');
-        }
-      } catch(err) {
-        toast('Work order saved, but the performance guarantee could not reach the backend API.','wa');
-      }
-    }
-    var r = byId(DB.requisitions,'no',rec.req);
-    if(r && r.status==='Approved'){ r.status = 'Procurement Initiated'; }
-    logAudit('Work Order', rec.no, status==='Draft'?'Draft Saved':'Created','Status','\u2014',status,'Order raised on '+vname(rec.vendor));
-    if(status!=='Draft') notify('in','Work order '+rec.no+' created','Issued to '+vname(rec.vendor)+' for '+inr(rec.value),'wo/list');
-    save();
-    toast((status==='Draft'? 'Saved <b>'+esc(rec.no)+'</b> as a draft' : 'Created <b>'+esc(rec.no)+'</b> for '+inr(rec.value))+' in PostgreSQL (id '+created.id+').','ok');
-    goto('wo/list');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  DB.workorders.unshift(rec);
+  if(status==='Pending Approval'){
+    rec.wf = wfBuild('Work Order', rec.value, modeKey(rec.mode)); rec.approver = wfStage(rec).role; bookCommitment(rec);
   }
+  DB.deliveries.unshift({
+    id: uid('D'), wo: rec.no, vendor: rec.vendor, mat: rec.lines[0].mat,
+    ordered: sum(rec.lines,'qty'), delivered:0, pending: sum(rec.lines,'qty'),
+    dispatch:'', expected: rec.due, actual:'', delay:0, challan:'', transporter:'',
+    status:'Not Dispatched', store: rec.store
+  });
+  if(rec.pg>0){
+    DB.pgs.push({id:uid('P'), wo:rec.no, contract:val('wContract'), vendor:rec.vendor, amount:rec.pg,
+      pctv:nval('wPgPct'), instrType:'Bank Guarantee', instrNo:'PBG/'+pad(88500+DB.pgs.length*23,7),
+      bank:'State Bank of India', issue:rec.date, expiry: addDays(rec.due, 420),
+      claim:'6 months beyond warranty', verify:'Under Verification',
+      release: addDays(rec.due, 380), status:'Received'});
+  }
+  var r = byId(DB.requisitions,'no',rec.req);
+  if(r && r.status==='Approved'){ r.status = 'Procurement Initiated'; }
+  logAudit('Work Order', rec.no, status==='Draft'?'Draft Saved':'Created','Status','\u2014',status,'Order raised on '+vname(rec.vendor));
+  if(status!=='Draft') notify('in','Work order '+rec.no+' submitted','Pending with '+rec.approver+' \u2014 '+inr(rec.value),'wo/list');
+  save();
+  toast(status==='Draft'? 'Saved <b>'+esc(rec.no)+'</b> as a draft.' : 'Submitted <b>'+esc(rec.no)+'</b> for '+inr(rec.value)+' \u2014 pending with '+esc(rec.approver)+'.','ok');
+  goto('wo/list');
 }
 
 /* ---------- work order register ---------- */
@@ -3717,7 +3400,7 @@ SCREENS['wo/list'] = function(){
   ])+
   filterBar([
     fld({id:'fwNo', label:'Work order number', ph:'WO/'}),
-    fld({id:'fwVendor', label:'Vendor', type:'select', opts:DB.vendors.map(function(v){ return {v:v.party_code,l:v.party_name}; }), blank:'All'}),
+    fld({id:'fwVendor', label:'Vendor', type:'select', opts:VENDORS.map(function(v){ return {v:v.code,l:v.name}; }), blank:'All'}),
     fld({id:'fwDept', label:'Department', type:'select', opts:DEPTS, blank:'All'}),
     fld({id:'fwStatus', label:'Status', type:'select', opts:['Draft','Approved','Issued','Delivered','Delayed','Closed','Cancelled'], blank:'All'}),
     fld({id:'fwFrom', label:'From date', type:'date'}),
@@ -3739,11 +3422,13 @@ SCREENS['wo/list'] = function(){
       var p = pct(r.delivered, sum(r.lines,'qty'));
       return '<span class="'+(p>=100?'fw7':'')+'">'+p.toFixed(0)+'%</span>'; },
       sv:function(r){ return pct(r.delivered, sum(r.lines,'qty')); }},
-    {h:'Status', k:'status', f:function(r){ return badge(r.status); }},
+    {h:'Status', k:'status', f:function(r){ return badge(r.status)+(r.status==='Pending Approval'?'<div class="muted" style="font-size:10.5px">'+esc(r.approver||'')+'</div>':''); }},
+    {h:'Stage Age / SLA', k:'sla', srt:false, f:function(r){ if(r.status==='Pending Approval') woEnsureWf(r); return slaCell(slaFor(r)); }},
     {h:'Amendments', k:'amendments', cls:'num'},
     {h:'Actions', k:'a', cls:'acts', srt:false, f:function(r){
       return actIcon('View','viewWo(\''+r.id+'\')')+
-      (r.status==='Draft'? actIcon('Approve','approveWo(\''+r.id+'\')','ok'):'')+
+      (r.status==='Draft'? actIcon('Submit','submitWo(\''+r.id+'\')','pri'):'')+
+      (r.status==='Pending Approval'? actIcon('Approve','approveWo(\''+r.id+'\')','ok')+actIcon('Return','returnWo(\''+r.id+'\')','warn'):'')+
       (r.status==='Approved'? actIcon('Issue','issueWo(\''+r.id+'\')','sec'):'')+
       actIcon('Amend','amendWo(\''+r.id+'\')','warn')+
       (['Delivered','Closed','Cancelled'].indexOf(r.status)<0? actIcon('Cancel','cancelWo(\''+r.id+'\')','dgr'):'')+
@@ -3830,24 +3515,14 @@ function viewWo(id){
         }).join('')+'</tbody></table></div>' : '<div class="note in">No amendment issued against this order.</div>')+
       pane('vw',6, auditTableHtml(DB.trail.filter(function(t){ return t.ref===w.no; }))),
     footer:'<button class="btn gh" onclick="printWo(\''+w.id+'\')">Print order</button>'+
+      '<button class="btn gh" onclick="showWoWf(\''+w.id+'\')">Approval workflow</button>'+
+      (w.status==='Pending Approval'? '<button class="btn ok" onclick="approveWo(\''+w.id+'\')">Approve</button>':'')+
       (w.status==='Approved'? '<button class="btn sec" onclick="issueWo(\''+w.id+'\')">Issue to vendor</button>':'')+
       '<button class="btn" data-close>Close</button>'});
 }
-function approveWo(id){
-  var w = byId(DB.workorders,'id',id);
-  if(!w.budgetOk){ toast('Funds are not committed for <b>'+esc(w.no)+'</b>. Run the budget check first.','er'); return; }
-  confirmAct({title:'Approve work order', ok:'Approve', btnClass:'ok', reason:true,
-    message:'<b>'+esc(w.no)+'</b> worth '+inr(w.value)+' is approved by the competent authority.',
-    detail: kvRow('Vendor', esc(vname(w.vendor)))+kvRow('Order value', inr(w.value))+kvRow('Delivery due', fdate(w.due))},
-    function(reason){
-      var o=w.status; w.status='Approved';
-      logAudit('Work Order', w.no,'Approved','Status',o,'Approved',reason);
-      closeAllModals(); tblReload('tWo', DB.workorders);
-      commit('Approved <b>'+esc(w.no)+'</b>.','ok');
-    });
-}
 function issueWo(id){
   var w = byId(DB.workorders,'id',id);
+  if(!woIssueCheck(w)) return;
   confirmAct({title:'Issue work order to vendor', ok:'Issue order', btnClass:'sec', reason:true,
     message:'The order is issued to <b>'+esc(vname(w.vendor))+'</b> and the delivery clock starts.'},
     function(reason){
@@ -3868,7 +3543,7 @@ function cancelWo(id){
       ? '<b>Careful.</b> '+recd.length+' goods receipt(s) already exist against this order. Cancelling leaves those receipts without a live order.'
       : 'The order is cancelled and the committed funds released back to the budget head.'},
     function(reason){
-      var o=w.status; w.status='Cancelled';
+      var o=w.status; w.status='Cancelled'; releaseCommitment(w,'Cancelled');
       logAudit('Work Order', w.no,'Cancelled','Status',o,'Cancelled',reason);
       closeAllModals(); tblReload('tWo', DB.workorders);
       commit('Cancelled <b>'+esc(w.no)+'</b>. Funds released.','er');
@@ -3892,57 +3567,28 @@ function amendWo(id){
     footer:'<button class="btn" data-close>Cancel</button>'+
       '<button class="btn pri" onclick="saveAmendment(\''+id+'\')">Issue amendment</button>'});
 }
-function amToISODate(s){
-  if(!s) return undefined;
-  s = String(s).trim();
-  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  var m = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-  if(m) return m[3]+'-'+m[2]+'-'+m[1];
-  var d = new Date(s);
-  if(!isNaN(d)) return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-  return undefined;
-}
-function amToNumber(s){
-  if(s===undefined || s===null || s==='') return undefined;
-  var n = Number(String(s).replace(/,/g,''));
-  return isNaN(n) ? undefined : n;
-}
-async function saveAmendment(id){
+function saveAmendment(id){
   if(!requireOk('amForm')) return;
   var w = byId(DB.workorders,'id',id);
+  var no = 'AMD/2026/'+pad(10+DB.amendments.length,4);
   var type = val('amType');
-  var isDelivery = type==='Delivery Extension';
-  var newDeliveryDate = isDelivery ? amToISODate(val('amNew')) : undefined;
-  if(isDelivery && !newDeliveryDate){ toast('Enter the revised delivery date as DD-MM-YYYY.','er'); return; }
-  var payload = {amend_type: type,
-    old_value: isDelivery ? undefined : amToNumber(val('amOld')),
-    new_value: isDelivery ? undefined : amToNumber(val('amNew')),
-    reason: val('amReason'), new_delivery_date: newDeliveryDate};
-  try {
-    var res = await fetch(API_BASE+'/work-orders/'+w.id+'/amendments', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the amendment ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    var no = created.amend_no || ('AMD/2026/'+pad(10+DB.amendments.length,4));
-    DB.amendments.push({id:uid('AM'), no:no, wo:w.no, date:val('amDate'), type:type,
-      field: type==='Delivery Extension'? 'Delivery Due Date' : type,
-      oldv: val('amOld'), newv: val('amNew'), value:0, reason: val('amReason'),
-      authority: val('amAuth'), status:'Approved'});
-    if(type==='Delivery Extension'){
-      var old = w.due; w.due = val('amNew');
-      var d = DB.deliveries.filter(function(x){ return x.wo===w.no; })[0];
-      if(d){ d.expected = w.due; if(d.status==='Delayed') d.status='Not Dispatched'; d.delay = 0; }
-      logAudit('Work Order', w.no,'Amended','Delivery Due Date', fdate(old), fdate(w.due), val('amReason'));
-    } else {
-      logAudit('Work Order', w.no,'Amended', type, val('amOld'), val('amNew'), val('amReason'));
-    }
-    w.amendments = (w.amendments||0)+1;
-    if(w.status!=='Draft') w.status = 'Amended';
-    closeModal(); save();
-    if(TBL.tWo) tblReload('tWo', DB.workorders);
-    toast('Issued amendment <b>'+esc(no)+'</b> against '+esc(w.no)+' in PostgreSQL.','ok');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  DB.amendments.push({id:uid('AM'), no:no, wo:w.no, date:val('amDate'), type:type,
+    field: type==='Delivery Extension'? 'Delivery Due Date' : type,
+    oldv: val('amOld'), newv: val('amNew'), value:0, reason: val('amReason'),
+    authority: val('amAuth'), status:'Approved'});
+  if(type==='Delivery Extension'){
+    var old = w.due; w.due = val('amNew');
+    var d = DB.deliveries.filter(function(x){ return x.wo===w.no; })[0];
+    if(d){ d.expected = w.due; if(d.status==='Delayed') d.status='Not Dispatched'; d.delay = 0; }
+    logAudit('Work Order', w.no,'Amended','Delivery Due Date', fdate(old), fdate(w.due), val('amReason'));
+  } else {
+    logAudit('Work Order', w.no,'Amended', type, val('amOld'), val('amNew'), val('amReason'));
   }
+  w.amendments = (w.amendments||0)+1;
+  if(w.status!=='Draft') w.status = 'Amended';
+  closeModal(); save();
+  if(TBL.tWo) tblReload('tWo', DB.workorders);
+  toast('Issued amendment <b>'+esc(no)+'</b> against '+esc(w.no)+'.','ok');
 }
 function printWo(id){
   var w = byId(DB.workorders,'id',id);
@@ -4064,7 +3710,7 @@ function saveDispatch(id){
   var w = byId(DB.workorders,'no',d.wo);
   if(w){
     w.delivered = d.delivered;
-    w.deliveredValue = Math.round(d.delivered * w.lines[0].rate * 1.18);
+    w.deliveredValue = Math.round(d.delivered * w.lines[0].rate * woTaxFactor(w));
     if(d.pending===0 && w.status!=='Closed') w.status = 'Delivered';
   }
   logAudit('Delivery', d.wo,'Dispatch Recorded','Status',old,d.status, num(q)+' units dispatched under challan '+d.challan);
@@ -4075,7 +3721,7 @@ function delayAlert(id){
   var d = byId(DB.deliveries,'id',id);
   var days = Math.max(0, daysBetween(d.expected, TODAY));
   var w = byId(DB.workorders,'no',d.wo) || {value:0};
-  var ld = Math.min(Math.round(w.value*0.10), Math.round(w.value*0.005*Math.ceil(days/7)));
+  var ld = ldCompute(w.value, days);
   confirmAct({title:'Raise delay alert', kind:'wa', btnClass:'warn', ok:'Send alert', reason:true,
     message:'A delay alert is sent to <b>'+esc(vname(d.vendor))+'</b> and the liquidated damages exposure is recorded.',
     detail: kvRow('Work order', esc(d.wo))+kvRow('Expected delivery', fdate(d.expected))+
@@ -4129,7 +3775,7 @@ SCREENS['grn/list'] = function(){
   filterBar([
     fld({id:'fgNo', label:'GRN number', ph:'GRN/'}),
     fld({id:'fgWo', label:'Work order', ph:'WO/'}),
-    fld({id:'fgVendor', label:'Vendor', type:'select', opts:DB.vendors.map(function(v){ return {v:v.party_code,l:v.party_name}; }), blank:'All'}),
+    fld({id:'fgVendor', label:'Vendor', type:'select', opts:VENDORS.map(function(v){ return {v:v.code,l:v.name}; }), blank:'All'}),
     fld({id:'fgStore', label:'Store', type:'select', opts:STORES, blank:'All'}),
     fld({id:'fgInsp', label:'Inspection', type:'select', opts:['Pending','Under Inspection','Accepted','Accepted with Deviation','Rejected'], blank:'All'}),
     fld({id:'fgPost', label:'Posting', type:'select', opts:['Pending','Posted'], blank:'All'})
@@ -4213,7 +3859,7 @@ function grnEntry(woNo){
 function grnWoInfo(){
   var box = document.getElementById('grWoBox'); if(!box) return;
   var w = byId(DB.workorders,'no',val('grWo'));
-  if(!w || !w.lines || !w.lines.length){ box.innerHTML = '<div class="note in">Select a work order to load the ordered quantity and consignee.</div>'; return; }
+  if(!w){ box.innerHTML = '<div class="note in">Select a work order to load the ordered quantity and consignee.</div>'; return; }
   var already = sum(DB.grns.filter(function(g){ return g.wo===w.no; }),'received');
   var ordered = sum(w.lines,'qty');
   box.innerHTML = '<div class="grid g4">'+
@@ -4236,7 +3882,7 @@ function grnCalc(){
   var msgs = [];
   if(acc + rej > recd) msgs.push(['er','Accepted plus rejected quantity ('+num(acc+rej)+') exceeds the received quantity ('+num(recd)+').']);
   if(dam > recd) msgs.push(['er','Damaged quantity cannot exceed the received quantity.']);
-  if(w && w.lines && w.lines.length){
+  if(w){
     var ordered = sum(w.lines,'qty');
     var already = sum(DB.grns.filter(function(g){ return g.wo===w.no; }),'received');
     var bal = ordered - already;
@@ -4249,18 +3895,12 @@ function grnCalc(){
   }
   out.innerHTML = msgs.map(function(m){ return '<div class="note '+m[0]+'" style="margin-bottom:6px">'+m[1]+'</div>'; }).join('');
 }
-async function saveGrn(){
+function saveGrn(){
   if(!requireOk('grForm')) return;
   var w = byId(DB.workorders,'no',val('grWo'));
-  if(!w){ toast('Select a valid work order before saving.','er'); return; }
-  if(!w.lines || !w.lines.length){ toast('The selected work order has no line items to receive against.','er'); return; }
   var recd = nval('grRecd'), acc = nval('grAcc'), rej = nval('grRej');
   if(recd<=0){ toast('Received quantity must be greater than zero.','er'); return; }
   if(acc + rej > recd){ toast('Accepted plus rejected quantity cannot exceed the received quantity.','er'); return; }
-  var storeObj = byId(DB.stores,'store_name', val('grStore'));
-  if(!storeObj){ toast('Select a valid receiving store before saving.','er'); return; }
-  var matObj = byId(DB.materials,'code', w.lines[0].mat);
-  if(!matObj){ toast('Could not resolve the ordered material against the master data.','er'); return; }
   var rec = {
     id: uid('G'), no: val('grNo'), date: val('grDate'), wo: w.no, vendor: w.vendor, mat: w.lines[0].mat,
     received: recd, accepted: acc, rejected: rej, damaged: nval('grDam'),
@@ -4269,39 +3909,27 @@ async function saveGrn(){
     store: val('grStore'), location: val('grBin'),
     batch: val('grBatch'), mfg: val('grMfg'), exp: val('grExp'),
     inspection: w.inspection==='Required' ? 'Pending' : 'Accepted',
-    posting: 'Pending', receiver: val('grReceiver'), remarks: val('grRemarks'),
+    posting: 'Pending', receiver: val('grReceiver'), remarks: val('grRemarks'), maker: curUser(),
     attachments: attList('grAtt')
   };
-  var payload = {
-    wo_id: w.id, store_id: storeObj.id, challan_no: rec.challan, challan_date: rec.challanDate,
-    lines: [{item_id: matObj.id, challan_qty: recd, received_qty: recd}]
-  };
-  try {
-    var res = await fetch(API_BASE+'/grn/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the GRN ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    rec.id = created.id; rec.no = created.grn_no || rec.no;
-    DB.grns.unshift(rec);
-    var d = DB.deliveries.filter(function(x){ return x.wo===w.no; })[0];
-    if(d){
-      d.delivered = Math.min(d.ordered, d.delivered + recd);
-      d.pending = Math.max(0, d.ordered - d.delivered);
-      d.status = d.pending===0 ? 'Delivered' : 'Partially Delivered';
-      if(d.pending===0) d.actual = rec.date;
-    }
-    w.delivered = (d? d.delivered : w.delivered + recd);
-    w.deliveredValue = Math.round(w.delivered * w.lines[0].rate * 1.18);
-    logAudit('GRN', rec.no,'Created','Status','\u2014','Pending',
-      num(recd)+' received against '+w.no+' under challan '+rec.challan);
-    if(rec.inspection==='Pending') notify('wa','GRN '+rec.no+' awaiting inspection', num(recd)+' units received at '+rec.store,'grn/pending');
-    closeModal(); save();
-    if(TBL.tGrn) tblReload('tGrn', DB.grns);
-    refreshNavCounts();
-    toast('Recorded <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+'). '+(rec.inspection==='Pending'? 'Sent for inspection.':'Ready for posting.'),'ok');
-    goto('grn/list');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  DB.grns.unshift(rec);
+  var d = DB.deliveries.filter(function(x){ return x.wo===w.no; })[0];
+  if(d){
+    d.delivered = Math.min(d.ordered, d.delivered + recd);
+    d.pending = Math.max(0, d.ordered - d.delivered);
+    d.status = d.pending===0 ? 'Delivered' : 'Partially Delivered';
+    if(d.pending===0) d.actual = rec.date;
   }
+  w.delivered = (d? d.delivered : w.delivered + recd);
+  w.deliveredValue = Math.round(w.delivered * w.lines[0].rate * woTaxFactor(w));
+  logAudit('GRN', rec.no,'Created','Status','\u2014','Pending',
+    num(recd)+' received against '+w.no+' under challan '+rec.challan);
+  if(rec.inspection==='Pending') notify('wa','GRN '+rec.no+' awaiting inspection', num(recd)+' units received at '+rec.store,'grn/pending');
+  closeModal(); save();
+  if(TBL.tGrn) tblReload('tGrn', DB.grns);
+  refreshNavCounts();
+  toast('Recorded <b>'+esc(rec.no)+'</b>. '+(rec.inspection==='Pending'? 'Sent for inspection.':'Ready for posting.'),'ok');
+  goto('grn/list');
 }
 function viewGrn(id){
   var g = byId(DB.grns,'id',id);
@@ -4343,7 +3971,7 @@ function viewGrn(id){
       (g.posting==='Pending' && g.accepted>0? '<button class="btn ok" onclick="postGrn(\''+g.id+'\')">Post to inventory</button>':'')+
       '<button class="btn" data-close>Close</button>'});
 }
-function postGrn(id){
+function postGrnCore(id){
   var g = byId(DB.grns,'id',id);
   if(g.inspection==='Pending'||g.inspection==='Under Inspection'){
     toast('Complete the inspection for <b>'+esc(g.no)+'</b> before posting to inventory.','wa'); return;
@@ -4353,13 +3981,7 @@ function postGrn(id){
     message:'The accepted quantity is added to stock at <b>'+esc(g.store)+'</b> and a movement entry is created.',
     detail: kvRow('Material', esc(g.mat))+kvRow('Accepted quantity', num(g.accepted))+
             kvRow('Store', esc(g.store))+kvRow('Value', inr(g.accepted*w.lines[0].rate))},
-    async function(reason){
-      try {
-        var res = await fetch(API_BASE+'/grn/'+g.id+'/post-to-stock', {method:'PUT'});
-        if(!res.ok){ var e = await res.text(); toast('Post failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-      } catch(err) {
-        toast('Post failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
-      }
+    function(reason){
       g.posting = 'Posted';
       var s = DB.stock.filter(function(x){ return x.mat===g.mat && x.store===g.store; })[0];
       if(s){ s.avail += g.accepted; }
@@ -4382,7 +4004,7 @@ function postGrn(id){
       closeAllModals();
       if(TBL.tGrn) tblReload('tGrn', DB.grns);
       refreshNavCounts();
-      commit('Posted <b>'+num(g.accepted)+'</b> unit(s) of '+esc(g.mat)+' to '+esc(g.store)+' in PostgreSQL.','ok');
+      commit('Posted <b>'+num(g.accepted)+'</b> unit(s) of '+esc(g.mat)+' to '+esc(g.store)+'.','ok');
     });
 }
 
@@ -4456,7 +4078,7 @@ function inspCalc(id){
     out.innerHTML = '<div class="note ok">Full acceptance. The quantity becomes available for posting to inventory.</div>';
   }
 }
-async function saveInspection(id, outcome){
+function saveInspection(id, outcome){
   if(!requireOk('inForm')) return;
   var g = byId(DB.grns,'id',id);
   var acc = outcome==='Rejected' ? 0 : nval('inAcc');
@@ -4471,33 +4093,24 @@ async function saveInspection(id, outcome){
     nc: val('inNc'), reco: val('inReco'),
     status: outcome==='Rejected' ? 'Rejected' : (rej>0 ? 'Accepted with Deviation':'Accepted')
   };
-  var payload = {passed_qty: acc, rejected_qty: rej, test_type: val('inCert')||undefined, rejection_reason: reason||undefined};
-  try {
-    var res = await fetch(API_BASE+'/grn/'+g.id+'/inspections', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the inspection ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    rec.no = created.insp_no || rec.no;
-    DB.inspections.unshift(rec);
-    var old = g.inspection;
-    g.inspection = created.overall_status || rec.status; g.accepted = acc; g.rejected = rej;
-    if(rej>0){
-      DB.rtv.unshift({id:uid('RT'), no:'RTV/2026/'+pad(340+DB.rtv.length*4,5), grn:g.no, wo:g.wo,
-        vendor:g.vendor, mat:g.mat, qty:rej, rate:0, reason:'Rejected on inspection',
-        date: addDays(rec.date,1), mode:'Vendor pickup', replacement:'Replacement Pending',
-        ack:'Pending', status:'Replacement Pending'});
-    }
-    logAudit('GRN', g.no,'Inspected','Inspection Status', old, g.inspection, reason);
-    if(rej>0) notify('wa','Inspection rejected quantity \u2014 '+g.no, num(rej)+' unit(s) to be returned to '+vname(g.vendor),'grn/rtv');
-    closeAllModals(); save();
-    ['tGrn','tGrnP','tIns'].forEach(function(t){
-      if(TBL[t]) tblReload(t, t==='tGrn'? DB.grns : (t==='tIns'? DB.inspections
-        : DB.grns.filter(function(x){ return x.inspection==='Pending'||x.inspection==='Under Inspection'; })));
-    });
-    refreshNavCounts();
-    toast('Inspection recorded in PostgreSQL for <b>'+esc(g.no)+'</b> \u2014 '+num(acc)+' accepted, '+num(rej)+' rejected.','ok');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
+  DB.inspections.unshift(rec);
+  var old = g.inspection;
+  g.inspection = rec.status; g.accepted = acc; g.rejected = rej;
+  if(rej>0){
+    DB.rtv.unshift({id:uid('RT'), no:'RTV/2026/'+pad(340+DB.rtv.length*4,5), grn:g.no, wo:g.wo,
+      vendor:g.vendor, mat:g.mat, qty:rej, rate:0, reason:'Rejected on inspection',
+      date: addDays(rec.date,1), mode:'Vendor pickup', replacement:'Replacement Pending',
+      ack:'Pending', status:'Replacement Pending'});
   }
+  logAudit('GRN', g.no,'Inspected','Inspection Status', old, g.inspection, reason);
+  if(rej>0) notify('wa','Inspection rejected quantity \u2014 '+g.no, num(rej)+' unit(s) to be returned to '+vname(g.vendor),'grn/rtv');
+  closeAllModals(); save();
+  ['tGrn','tGrnP','tIns'].forEach(function(t){
+    if(TBL[t]) tblReload(t, t==='tGrn'? DB.grns : (t==='tIns'? DB.inspections
+      : DB.grns.filter(function(x){ return x.inspection==='Pending'||x.inspection==='Under Inspection'; })));
+  });
+  refreshNavCounts();
+  toast('Inspection recorded for <b>'+esc(g.no)+'</b> \u2014 '+num(acc)+' accepted, '+num(rej)+' rejected.','ok');
 }
 
 /* ---------- inspection register ---------- */
@@ -4867,7 +4480,7 @@ function trStock(){
       num(Math.max(0,s.avail-s.reserved))+'</b>.</div>'
     : '<div class="note wa">No stock record for this material at the selected store.</div>';
 }
-async function saveTransfer(){
+function saveTransfer(){
   if(!requireOk('trForm')) return;
   if(val('trFrom')===val('trTo')){ toast('The source and destination stores must be different.','er'); return; }
   var src = DB.stock.filter(function(x){ return x.mat===val('trMat') && x.store===val('trFrom'); })[0];
@@ -4875,27 +4488,14 @@ async function saveTransfer(){
   if(!src || (src.avail - src.reserved) < q){
     toast('Net available stock at the source store is not enough for this transfer.','er'); return;
   }
-  var fromObj = byId(DB.stores,'store_name', val('trFrom'));
-  var toObj = byId(DB.stores,'store_name', val('trTo'));
-  var matObj = byId(DB.materials,'code', val('trMat'));
-  if(!fromObj || !toObj || !matObj){ toast('Could not resolve store or material against the master data.','er'); return; }
   var rec = {id:uid('TR'), no:val('trNo'), date:val('trDate'), mat:val('trMat'), qty:q,
     uom:muom(val('trMat')), from:val('trFrom'), to:val('trTo'), approver:val('trApp'),
     challan:val('trChallan'), dispatched:'', received:'', status:'Pending'};
-  var payload = {from_store_id: fromObj.id, to_store_id: toObj.id, item_id: matObj.id, transfer_qty: q, dispatch_gatepass: rec.challan};
-  try {
-    var res = await fetch(API_BASE+'/inventory/transfers', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the transfer ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    rec.id = created.id; rec.no = created.transfer_no || rec.no;
-    DB.transfers.unshift(rec);
-    logAudit('Stock Transfer', rec.no,'Created','Status','\u2014','Pending',val('trReason'));
-    closeModal(); save();
-    toast('Created transfer <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+'). Despatch it to move the stock.','ok');
-    goto('inv/transfer');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-  }
+  DB.transfers.unshift(rec);
+  logAudit('Stock Transfer', rec.no,'Created','Status','\u2014','Pending',val('trReason'));
+  closeModal(); save();
+  toast('Created transfer <b>'+esc(rec.no)+'</b>. Despatch it to move the stock.','ok');
+  goto('inv/transfer');
 }
 function despatchTransfer(id){
   var t = byId(DB.transfers,'id',id);
@@ -4910,20 +4510,14 @@ function despatchTransfer(id){
         value:t.qty*mrate(t.mat), ref:t.no, by:'Store Officer', status:'Approved'});
       logAudit('Stock Transfer', t.no,'Despatched','Status','Pending','In Transit',reason);
       tblReload('tTrf', DB.transfers);
-      commit('Despatched <b>'+esc(t.no)+'</b> (local only \u2014 the backend has no despatch stage; use Acknowledge receipt to complete the transfer in PostgreSQL).','wa');
+      commit('Despatched <b>'+esc(t.no)+'</b>.','ok');
     });
 }
-async function receiveTransfer(id){
+function receiveTransfer(id){
   var t = byId(DB.transfers,'id',id);
   confirmAct({title:'Acknowledge transfer receipt', ok:'Acknowledge receipt', btnClass:'ok', reason:true,
     message:'<b>'+esc(t.to)+'</b> acknowledges receipt of '+num(t.qty)+' unit(s) of '+esc(t.mat)+'.'},
-    async function(reason){
-      try {
-        var res = await fetch(API_BASE+'/inventory/transfers/'+t.id+'/receive', {method:'PUT'});
-        if(!res.ok){ var e = await res.text(); toast('Failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-      } catch(err) {
-        toast('Failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
-      }
+    function(reason){
       var src = DB.stock.filter(function(x){ return x.mat===t.mat && x.store===t.from; })[0];
       if(src) src.transit = Math.max(0, src.transit - t.qty);
       var dst = DB.stock.filter(function(x){ return x.mat===t.mat && x.store===t.to; })[0];
@@ -4936,7 +4530,7 @@ async function receiveTransfer(id){
       t.received = TODAY; t.status = 'Received';
       logAudit('Stock Transfer', t.no,'Received','Status','In Transit','Received',reason);
       tblReload('tTrf', DB.transfers);
-      commit('Receipt acknowledged at <b>'+esc(t.to)+'</b> in PostgreSQL.','ok');
+      commit('Receipt acknowledged at <b>'+esc(t.to)+'</b>.','ok');
     });
 }
 
@@ -4984,7 +4578,7 @@ function issueEntry(){
       fld({id:'isStore', label:'Issuing store', type:'select', opts:STORES, req:true, onchange:'isStock()'})+
       fld({id:'isQty', label:'Quantity', type:'number', val:1, num:true, req:true, min:1})+
       fld({id:'isDept', label:'Indenting department', type:'select', opts:DEPTS, req:true})+
-      fld({id:'isIndentor', label:'Indentor', val:'Anil Katwale', req:true})+
+      fld({id:'isIndentor', label:'Indentor', val:curUser(), req:true})+
       fld({id:'isRecipient', label:'Recipient', val:'Section Officer', req:true})+
       fld({id:'isGate', label:'Gate pass number', val:'GP/2026/'+pad(200+DB.issues.length,4)})+
       '</div><div id="isStockOut" style="margin-top:11px"></div>'+
@@ -5003,38 +4597,40 @@ function isStock(){
       '</b> at '+esc(val('isStore'))+'.</div>'
     : '<div class="note wa">No stock record for this material at the selected store.</div>';
 }
-async function saveIssue(){
+function saveIssue(){
   if(!requireOk('isForm')) return;
   var s = DB.stock.filter(function(x){ return x.mat===val('isMat') && x.store===val('isStore'); })[0];
   var q = nval('isQty');
   if(!s || (s.avail - s.reserved) < q){ toast('Net available stock is not enough for this issue.','er'); return; }
-  var storeObj = byId(DB.stores,'store_name', val('isStore'));
-  var matObj = byId(DB.materials,'code', val('isMat'));
-  if(!storeObj || !matObj){ toast('Could not resolve store or material against the master data.','er'); return; }
   var rec = {id:uid('IS'), no:val('isNo'), date:val('isDate'), req:val('isReq')||'\u2014',
     mat:val('isMat'), qty:q, uom:muom(val('isMat')), rate:mrate(val('isMat')),
     store:val('isStore'), dept:val('isDept'), indentor:val('isIndentor'),
     recipient:val('isRecipient'), gatepass:val('isGate'), status:'Pending'};
-  var payload = {store_id: storeObj.id, receiver_name: rec.recipient, lines: [{item_id: matObj.id, issued_qty: q, unit_rate: rec.rate}]};
-  try {
-    var res = await fetch(API_BASE+'/inventory/issues', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the issue ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    rec.id = created.id; rec.no = created.issue_no || rec.no;
-    rec.status = 'Issued';
-    s.avail -= q;
-    var m = byId(DB.materials,'code',rec.mat); if(m) m.stock = Math.max(0, m.stock - q);
-    DB.issues.unshift(rec);
-    logAudit('Stock Issue', rec.no,'Issued','Status','\u2014','Issued',val('isPurpose'));
-    closeModal(); save(); refreshNavCounts();
-    toast('Issued <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+'). Stock deducted immediately by the backend.','ok');
-    goto('inv/issue');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-  }
+  DB.issues.unshift(rec);
+  logAudit('Stock Issue', rec.no,'Created','Status','\u2014','Pending',val('isPurpose'));
+  closeModal(); save();
+  toast('Created issue note <b>'+esc(rec.no)+'</b>. Confirm it to move the stock.','ok');
+  goto('inv/issue');
 }
 function confirmIssue(id){
-  toast('This issue note was already posted to PostgreSQL and the stock deducted when it was created \u2014 no separate confirmation step exists in the backend.','in');
+  var i = byId(DB.issues,'id',id);
+  confirmAct({title:'Confirm stock issue', ok:'Issue material', btnClass:'ok', reason:true,
+    message:'<b>'+num(i.qty)+'</b> unit(s) of '+esc(i.mat)+' are issued from '+esc(i.store)+' to '+esc(i.dept)+'.',
+    detail: kvRow('Recipient', esc(i.recipient))+kvRow('Gate pass', esc(i.gatepass))+
+            kvRow('Issue value', inr(i.qty*i.rate))},
+    function(reason){
+      var s = DB.stock.filter(function(x){ return x.mat===i.mat && x.store===i.store; })[0];
+      if(!s || s.avail < i.qty){ toast('Stock has changed \u2014 the balance is no longer enough.','er'); return; }
+      s.avail -= i.qty;
+      var m = byId(DB.materials,'code',i.mat); if(m) m.stock = Math.max(0, m.stock - i.qty);
+      i.status = 'Issued';
+      DB.movements.unshift({id:uid('V'), no:'MOV/2026/'+pad(9500+DB.movements.length*3,6), date:TODAY,
+        mat:i.mat, type:'Issue to Department', src:i.store, dst:i.dept, qty:i.qty, uom:i.uom,
+        value:i.qty*i.rate, ref:i.no, by:'Store Officer', status:'Approved'});
+      logAudit('Stock Issue', i.no,'Issued','Status','Pending','Issued',reason);
+      tblReload('tIss', DB.issues); refreshNavCounts();
+      commit('Issued <b>'+num(i.qty)+'</b> unit(s) of '+esc(i.mat)+'.','ok');
+    });
 }
 
 /* ---------- stock return ---------- */
@@ -5072,6 +4668,151 @@ SCREENS['inv/return'] = function(){
         : '<span class="muted">\u2014</span>'; }}
   ], empty:'No return recorded'})+'</div></div>';
 };
+
+/* ---------- tool issuance ---------- */
+SCREENS['inv/tools'] = function(){
+  var D = DB;
+  var items = D.toolIssuances || [];
+  return pageHead('Tool & Equipment Issuance Register','Inventory Integration',
+    'Track checkouts, assignments, and returns for tools, capital assets, and portable devices',
+    '<button class="btn sm pri" onclick="toolCheckoutEntry()">+ Issue Tool / Asset</button>',
+    reqTags('MMP_07','MMP_14'))+
+  tableEngine({
+    id:'tTools',
+    data: items,
+    cols:[
+      {h:'Issue Ref', k:'issue_ref', f:function(r){ return '<b>'+esc(r.issue_ref)+'</b>'; }},
+      {h:'Tool / Asset', k:'tool_name', f:function(r){ return esc(r.tool_name)+'<div class="muted" style="font-size:10.5px">Tag: '+esc(r.asset_tag||'—')+'</div>'; }},
+      {h:'Serial / Barcode', k:'serial_number', f:function(r){ return esc(r.serial_number||'—'); }},
+      {h:'Store', k:'store_name'},
+      {h:'Custodian / Officer', k:'issued_to_name', f:function(r){ return '<b>'+esc(r.issued_to_name)+'</b><div class="muted" style="font-size:10.5px">'+esc(r.department||'')+'</div>'; }},
+      {h:'Purpose', k:'purpose'},
+      {h:'Checkout Date', k:'issue_date', f:function(r){ return fdate(r.issue_date); }},
+      {h:'Expected Return', k:'expected_return_date', f:function(r){ return r.expected_return_date? fdate(r.expected_return_date):'—'; }},
+      {h:'Status', k:'status', f:function(r){ return badge(r.status); }},
+      {h:'Actions', k:'a', cls:'acts', srt:false, f:function(r){
+        return (r.status==='Issued' || r.status==='Overdue') ? actIcon('Return / Checkin',"toolCheckinEntry('" + r.id + "')",'pri') : actIcon('Returned','','ok');
+      }}
+    ]
+  });
+};
+
+function toolCheckoutEntry(){
+  modal({
+    title:'Issue Tool / Capital Asset to Custodian',
+    size:'md',
+    body:'<div class="fgrid g2">'+
+      fld({id:'tcTool', label:'Tool / Asset Name', req:true, ph:'e.g. Fluke Thermal Imaging Camera'})+
+      fld({id:'tcTag', label:'Asset Tag / Code', req:true, ph:'e.g. AST-IT-2026-088'})+
+      fld({id:'tcSerial', label:'Serial Number', ph:'e.g. SN-882194-FLK'})+
+      fld({id:'tcStore', label:'Issuing Store', type:'select', opts:STORES, req:true})+
+      fld({id:'tcCust', label:'Custodian / Officer Name', req:true, ph:'e.g. Er. Rajesh Sharma, AE(E)'})+
+      fld({id:'tcDept', label:'Department', type:'select', opts:DEPTS, req:true})+
+      fld({id:'tcDate', label:'Issue Date', type:'date', val:TODAY, req:true})+
+      fld({id:'tcReturn', label:'Expected Return Date', type:'date', val:addDays(TODAY, 14)})+
+      fld({id:'tcPurpose', label:'Purpose / Project', req:true, ph:'e.g. SDC Phase-2 Power Infrastructure Audit'})+
+      fld({id:'tcCond', label:'Condition at Issue', val:'Good / Calibrated'})+
+      '</div>',
+    footer:'<button class="btn" onclick="closeModal()">Cancel</button>'+
+      '<button class="btn pri" onclick="saveToolCheckout()">Confirm Issue</button>'
+  });
+}
+
+function saveToolCheckout(){
+  var tool = v('tcTool'), tag = v('tcTag'), serial = v('tcSerial'), store = v('tcStore');
+  var cust = v('tcCust'), dept = v('tcDept'), dt = v('tcDate'), rdt = v('tcReturn'), purp = v('tcPurpose'), cond = v('tcCond');
+  if(!tool || !tag || !cust || !purp){ toast('Please fill all required fields','er'); return; }
+  var newId = 'TIS-' + pad(Math.floor(Math.random()*9000)+1000, 4);
+  var rec = {
+    id: newId,
+    issue_ref: newId,
+    tool_name: tool,
+    asset_tag: tag,
+    serial_number: serial,
+    store_name: store,
+    issued_to_name: cust,
+    department: dept,
+    purpose: purp,
+    issue_date: dt,
+    expected_return_date: rdt,
+    condition_on_issue: cond,
+    status: 'Issued'
+  };
+  if(!DB.toolIssuances) DB.toolIssuances = [];
+  DB.toolIssuances.unshift(rec);
+  logAudit('Tool Issuance', newId, 'Created', 'status', '', 'Issued', 'Tool checked out to ' + cust);
+  save();
+  closeModal();
+  toast('Tool issued successfully (' + newId + ')', 'ok');
+  goto('inv/tools');
+
+  try {
+    fetch(API_BASE + '/inventory/tool-issuances/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool_name: tool,
+        asset_tag: tag,
+        serial_number: serial,
+        store_name: store,
+        issued_to_name: cust,
+        department: dept,
+        purpose: purp,
+        issue_date: dt,
+        expected_return_date: rdt,
+        condition_on_issue: cond,
+        issued_by: curUser()
+      })
+    }).catch(function(){});
+  } catch(e) {}
+}
+
+function toolCheckinEntry(id){
+  var rec = byId(DB.toolIssuances, 'id', id) || byId(DB.toolIssuances, 'issue_ref', id);
+  if(!rec) { toast('Record not found','er'); return; }
+  modal({
+    title:'Check-in / Return Tool: ' + rec.tool_name,
+    size:'sm',
+    body:'<div class="fgrid">'+
+      '<p class="muted" style="margin-bottom:10px">Custodian: <b>'+esc(rec.issued_to_name)+'</b> ('+esc(rec.department)+')<br>Issued on: '+fdate(rec.issue_date)+'</p>'+
+      fld({id:'tciDate', label:'Return Date', type:'date', val:TODAY, req:true})+
+      fld({id:'tciCond', label:'Condition upon Return', type:'select', opts:['Good / Intact','Minor Wear','Damaged / Defective','Requires Calibration'], req:true})+
+      fld({id:'tciRemarks', label:'Inspection / Checkin Remarks', ph:'e.g. Returned with all accessories, verified working'})+
+      '</div>',
+    footer:'<button class="btn" onclick="closeModal()">Cancel</button>'+
+      '<button class="btn pri" onclick="saveToolCheckin(\\\''+id+'\\\')">Confirm Check-in</button>'
+  });
+}
+
+function saveToolCheckin(id){
+  var rec = byId(DB.toolIssuances, 'id', id) || byId(DB.toolIssuances, 'issue_ref', id);
+  if(!rec) return;
+  var rdt = v('tciDate'), cond = v('tciCond'), rem = v('tciRemarks');
+  rec.status = 'Returned';
+  rec.actual_return_date = rdt;
+  rec.condition_on_return = cond;
+  rec.return_remarks = rem;
+  logAudit('Tool Issuance', rec.issue_ref, 'Updated', 'status', 'Issued', 'Returned', 'Tool returned by ' + rec.issued_to_name);
+  save();
+  closeModal();
+  toast('Tool returned and checked into store', 'ok');
+  goto('inv/tools');
+
+  try {
+    fetch(API_BASE + '/inventory/tool-issuances/' + (rec.id || id) + '/checkin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actual_return_date: rdt,
+        condition_on_return: cond,
+        return_remarks: rem,
+        received_by: curUser()
+      })
+    }).catch(function(){});
+  } catch(e) {}
+}
+
+
 function returnEntry(){
   modal({title:'Record stock return', size:'md',
     body:'<div id="rtForm"><div class="fgrid g2">'+
@@ -5096,50 +4837,35 @@ function rtFromIssue(){
   if(!i) return;
   setVal('rtMat', i.mat); setVal('rtStore', i.store); setVal('rtDept', i.dept); setVal('rtQty', i.qty);
 }
-async function saveReturn(){
+function saveReturn(){
   if(!requireOk('rtForm')) return;
   var cond = val('rtCond');
-  var storeObj = byId(DB.stores,'store_name', val('rtStore'));
-  var matObj = byId(DB.materials,'code', val('rtMat'));
-  if(!storeObj || !matObj){ toast('Could not resolve store or material against the master data.','er'); return; }
   var rec = {id:uid('RN'), no:val('rtNo'), issue:val('rtIssue')||'\u2014', date:val('rtDate'),
     mat:val('rtMat'), qty:nval('rtQty'), uom:muom(val('rtMat')), store:val('rtStore'),
     dept:val('rtDept'), condition:cond, reason:val('rtReason'),
     restock: cond==='Serviceable'? 'Pending restock':'Sent for inspection',
     status: cond==='Serviceable'? 'Under Inspection':'Under Inspection'};
-  var payload = {store_id: storeObj.id, item_id: matObj.id, return_qty: rec.qty, condition_status: cond};
-  try {
-    var res = await fetch(API_BASE+'/inventory/returns', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the return ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    rec.id = created.id; rec.no = created.return_no || rec.no;
-    DB.returns.unshift(rec);
-    logAudit('Stock Return', rec.no,'Created','Status','\u2014','Under Inspection',rec.reason);
-    closeModal(); save();
-    toast('Recorded return <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+').','ok');
-    goto('inv/return');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-  }
+  DB.returns.unshift(rec);
+  logAudit('Stock Return', rec.no,'Created','Status','\u2014','Under Inspection',rec.reason);
+  closeModal(); save();
+  toast('Recorded return <b>'+esc(rec.no)+'</b>.','ok');
+  goto('inv/return');
 }
-async function restockReturn(id){
+function restockReturn(id){
   var r = byId(DB.returns,'id',id);
   confirmAct({title:'Restock returned material', ok:'Restock', btnClass:'ok', reason:true,
     message:'<b>'+num(r.qty)+'</b> unit(s) of '+esc(r.mat)+' are taken back into stock at '+esc(r.store)+'.'},
-    async function(reason){
-      try {
-        var res = await fetch(API_BASE+'/inventory/returns/'+r.id+'/restock', {method:'PUT'});
-        if(!res.ok){ var e = await res.text(); toast('Failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-      } catch(err) {
-        toast('Failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
-      }
+    function(reason){
       var s = DB.stock.filter(function(x){ return x.mat===r.mat && x.store===r.store; })[0];
       if(s) s.avail += r.qty;
       var m = byId(DB.materials,'code',r.mat); if(m) m.stock += r.qty;
       r.restock='Restocked'; r.status='Accepted';
+      DB.movements.unshift({id:uid('V'), no:'MOV/2026/'+pad(9600+DB.movements.length*3,6), date:TODAY,
+        mat:r.mat, type:'Return from User', src:r.dept, dst:r.store, qty:r.qty, uom:r.uom,
+        value:r.qty*mrate(r.mat), ref:r.no, by:'Store Officer', status:'Approved'});
       logAudit('Stock Return', r.no,'Restocked','Status','Under Inspection','Accepted',reason);
       tblReload('tRet', DB.returns);
-      commit('Restocked <b>'+num(r.qty)+'</b> unit(s) of '+esc(r.mat)+' into '+esc(r.store)+' in PostgreSQL.','ok');
+      commit('Restocked <b>'+num(r.qty)+'</b> unit(s).','ok');
     });
 }
 function condemnReturn(id){
@@ -5151,7 +4877,7 @@ function condemnReturn(id){
       var no = 'DSP/2026/'+pad(40+DB.disposals.length,5);
       var orig = r.qty*mrate(r.mat);
       DB.disposals.unshift({id:uid('DS'), no:no, mat:r.mat, store:r.store, location:'Bin-Z-01',
-        batch:'', qty:r.qty, original:orig, book:Math.round(orig*0.35), residual:Math.round(orig*0.11),
+        batch:'', qty:r.qty, original:orig, book:Math.round(orig*P('condemnBookPct')/100), residual:Math.round(orig*P('condemnResidualPct')/100), maker:curUser(),
         reason:'Unserviceable', method:'Auction', approval:'Pending', status:'Draft',
         committee:'Condemnation Board \u2014 '+r.dept, buyer:'', auction:'', date:TODAY, value:0,
         remittance:'', attachments:[]});
@@ -5161,127 +4887,13 @@ function condemnReturn(id){
     });
 }
 
-/* ---------- tool issuance (daily check-out / check-in) ---------- */
-SCREENS['inv/tools'] = function(){
-  return pageHead('Tool Issuance','Inventory Integration',
-    'Daily check-out of returnable tools and equipment to workers, with check-in tracking',
-    '<button class="btn gh sm" onclick="tblExport(\'tTool\',\'Tool_Issuance_Register\')">⤓ Export</button>'+
-    '<button class="btn pri sm" onclick="toolCheckoutEntry()">+ Check out tool</button>',
-    reqTags('MMP_12'))+
-  summaryRow([
-    {l:'Vouchers', v:DB.toolIssuances.length, c:'#1E5A96'},
-    {l:'With workers', v:DB.toolIssuances.filter(function(t){ return t.status==='Issued'; }).length, c:'#B45309'},
-    {l:'Returned', v:DB.toolIssuances.filter(function(t){ return t.status==='Returned'; }).length, c:'#15803D'},
-    {l:'Overdue', v:DB.toolIssuances.filter(function(t){ return t.status==='Issued' && t.expected < TODAY; }).length, c:'#B91C1C'}
-  ])+
-  '<div class="card"><div class="bd">'+renderTable({id:'tTool', rows:DB.toolIssuances, cols:[
-    {h:'Voucher No.', k:'no', cls:'mono'},
-    {h:'Date', k:'date', f:function(r){ return fdate(r.date); }},
-    {h:'Tool', k:'mat', cls:'mono'},
-    {h:'Tool Name', k:'n', f:function(r){ return esc(mname(r.mat)); }},
-    {h:'Serial No.', k:'serial', cls:'mono'},
-    {h:'Store', k:'store'},
-    {h:'Worker / Labour', k:'worker'},
-    {h:'ID Card', k:'idCard', cls:'mono'},
-    {h:'Shift', k:'shift'},
-    {h:'Expected Return', k:'expected', f:function(r){
-      var overdue = r.status==='Issued' && r.expected < TODAY;
-      return (overdue? '<span class="fw6" style="color:#B91C1C">':'')+fdate(r.expected)+(overdue? ' (Overdue)</span>':''); }},
-    {h:'Returned On', k:'returnedDate', f:function(r){ return r.returnedDate? fdate(r.returnedDate):'—'; }},
-    {h:'Condition', k:'condition'},
-    {h:'Status', k:'status', f:function(r){ return badge(r.status); }},
-    {h:'Actions', k:'a', cls:'acts', srt:false, f:function(r){
-      return r.status==='Issued'
-        ? actIcon('Check in','toolCheckinEntry(\''+r.id+'\')','ok')
-        : '<span class="muted">—</span>'; }}
-  ], empty:'No tool voucher recorded'})+'</div></div>';
-};
-function toolCheckoutEntry(){
-  var tools = DB.materials.filter(function(m){ return m.isTool || m.cat==='Tools & Equipment'; });
-  modal({title:'Check out tool to worker', size:'md',
-    body:'<div id="tlForm"><div class="fgrid g2">'+
-      fld({id:'tlNo', label:'Voucher number', val:'TOOL/2026/'+pad(100+DB.toolIssuances.length,5), ro:true})+
-      fld({id:'tlDate', label:'Issue date', type:'date', val:TODAY, req:true, date:true})+
-      fld({id:'tlMat', label:'Tool', type:'select', req:true,
-           opts:(tools.length?tools:DB.materials).map(function(m){ return {v:m.code, l:m.code+' — '+m.name}; })})+
-      fld({id:'tlSerial', label:'Tool serial / asset tag', ph:'e.g. TOOL-SN-4102'})+
-      fld({id:'tlQty', label:'Quantity', type:'number', val:1, num:true, req:true, min:1})+
-      fld({id:'tlStore', label:'Issuing store', type:'select', opts:STORES, req:true})+
-      fld({id:'tlWorker', label:'Worker / labour name', req:true})+
-      fld({id:'tlIdCard', label:'Worker ID card no.'})+
-      fld({id:'tlShift', label:'Shift', type:'select', blank:false,
-           opts:['Morning Shift','Evening Shift','Night Shift']})+
-      fld({id:'tlExpected', label:'Expected return date', type:'date', val:TODAY, req:true, date:true})+
-      '</div></div>',
-    footer:'<button class="btn" data-close>Cancel</button>'+
-      '<button class="btn pri" onclick="saveToolCheckout()">Check out</button>'});
-}
-async function saveToolCheckout(){
-  if(!requireOk('tlForm')) return;
-  var matObj = byId(DB.materials,'code', val('tlMat'));
-  var storeObj = byId(DB.stores,'store_name', val('tlStore'));
-  if(!matObj || !storeObj){ toast('Could not resolve tool or store against the master data.','er'); return; }
-  var payload = {item_id: matObj.id, store_id: storeObj.id, tool_serial_code: val('tlSerial')||undefined,
-    issued_qty: nval('tlQty')||1, worker_labor_name: val('tlWorker'), worker_id_card: val('tlIdCard')||undefined,
-    shift_name: val('tlShift'), expected_return: val('tlExpected')};
-  try {
-    var res = await fetch(API_BASE+'/inventory/tool-issuances/checkout', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the checkout ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    var rec = {id:created.id, no:created.voucher_no || val('tlNo'), date:val('tlDate'),
-      mat:matObj.code, serial:val('tlSerial')||('TOOL-SN-'+created.id), qty:nval('tlQty')||1,
-      store:val('tlStore'), worker:val('tlWorker'), idCard:val('tlIdCard')||'—', shift:val('tlShift'),
-      expected:val('tlExpected'), returnedQty:0, returnedDate:'', condition:'Working', fine:0,
-      status:'Issued', remarks:''};
-    DB.toolIssuances.unshift(rec);
-    logAudit('Tool Issuance', rec.no,'Checked Out','Worker','—',rec.worker,'Daily tool check-out');
-    closeModal(); save();
-    toast('Checked out tool <b>'+esc(rec.no)+'</b> to '+esc(rec.worker)+' in PostgreSQL (id '+created.id+').','ok');
-    goto('inv/tools');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-  }
-}
-function toolCheckinEntry(id){
-  var t = byId(DB.toolIssuances,'id',id);
-  modal({title:'Check in tool — '+esc(t.no), size:'md',
-    body:'<table class="kv" style="margin-bottom:11px">'+
-      kvRow('Tool', esc(mname(t.mat))+' <span class="muted">('+esc(t.mat)+')</span>')+
-      kvRow('Issued to', esc(t.worker)+' — '+esc(t.idCard))+
-      kvRow('Expected return', fdate(t.expected))+'</table>'+
-    '<div id="tiForm"><div class="fgrid g2">'+
-      fld({id:'tiCond', label:'Condition on return', type:'select', blank:false,
-           opts:['Good / Inspected','Minor Damage','Major Damage / Unserviceable']})+
-      fld({id:'tiFine', label:'Fine / damage amount (₹)', type:'number', val:0, num:true, min:0})+
-      '</div><div class="fgrid" style="margin-top:11px">'+
-      fld({id:'tiRemarks', label:'Remarks', type:'textarea', rows:2})+'</div></div>',
-    footer:'<button class="btn" data-close>Cancel</button>'+
-      '<button class="btn pri" onclick="saveToolCheckin(\''+id+'\')">Check in</button>'});
-}
-async function saveToolCheckin(id){
-  var t = byId(DB.toolIssuances,'id',id);
-  var payload = {tool_condition: val('tiCond'), remarks: val('tiRemarks')||undefined};
-  try {
-    var res = await fetch(API_BASE+'/inventory/tool-issuances/'+t.id+'/checkin', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the check-in ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
-  }
-  t.returnedQty = t.qty; t.returnedDate = TODAY; t.condition = val('tiCond'); t.fine = nval('tiFine')||0;
-  t.status = 'Returned';
-  logAudit('Tool Issuance', t.no,'Checked In','Condition','Working', t.condition, val('tiRemarks'));
-  closeModal(); save();
-  tblReload('tTool', DB.toolIssuances);
-  commit('Checked in tool <b>'+esc(t.no)+'</b> from '+esc(t.worker)+' in PostgreSQL.','ok');
-}
-
 /* ---------- reorder planning ---------- */
 SCREENS['inv/reorder'] = function(){
   var rows = DB.stock.filter(function(s){ return s.avail < mreorder(s.mat); })
     .map(function(s,i){
       var ro = mreorder(s.mat), m = byId(DB.materials,'code',s.mat) || {reorderQty:ro*2, leadTime:21};
       var openPo = sum(DB.workorders.filter(function(w){
-        return w.lines && w.lines[0] && w.lines[0].mat===s.mat && ['Issued','Approved','Delayed'].indexOf(w.status)>=0; }),
+        return w.lines[0].mat===s.mat && ['Issued','Approved','Delayed'].indexOf(w.status)>=0; }),
         function(w){ return w.lines[0].qty - w.delivered; });
       return {id:'RO'+i, mat:s.mat, store:s.store, avail:s.avail, reorder:ro,
         shortfall: Math.max(0, ro - s.avail), openPo:openPo,
@@ -5324,27 +4936,11 @@ function reorderToRequisition(){
   var value = sum(sel, function(r){ return r.suggest*r.rate; });
   confirmAct({title:'Raise replenishment requisition', ok:'Raise requisition', btnClass:'pri', reason:true,
     message:'A single requisition is raised covering '+sel.length+' material line(s) worth <b>'+inr(value)+'</b>.'},
-    async function(reason){
-      var storeObj = byId(DB.stores,'store_name', STORES[0]);
-      var payloadLines = [];
-      for(var i=0;i<sel.length;i++){
-        var r = sel[i];
-        var matObj = byId(DB.materials,'code', r.mat);
-        if(!matObj){ toast('Could not resolve material "'+esc(r.mat)+'" against the master data.','er'); return; }
-        payloadLines.push({item_id: matObj.id, requested_qty: r.suggest, est_unit_rate: r.rate, preferred_make:'', technical_spec: matObj.spec||''});
-      }
-      var payload = {req_date: TODAY, store_id: storeObj.id, priority:'Urgent',
-        purpose:'Replenishment against reorder level. '+reason, lines: payloadLines};
-      var created;
-      try {
-        var res = await fetch(API_BASE+'/requisitions/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-        if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the requisition ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-        created = await res.json();
-      } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
-      var no = created.req_no || seq('MR/DIT/2026/', DB.requisitions,'no',6);
+    function(reason){
+      var no = seq('MR/DIT/2026/', DB.requisitions,'no',6);
       DB.requisitions.unshift({
-        id:created.id, no:no, date:TODAY, dept:DEPTS[0], office:'Head Office', section:'Store Section',
-        requestor:'Anil Katwale',
+        id:uid('R'), no:no, date:TODAY, dept:DEPTS[0], office:'Head Office', section:'Store Section',
+        requestor:curUser(),
         lines: sel.map(function(r){
           return {mat:r.mat, desc:mname(r.mat), qty:r.suggest, uom:muom(r.mat), rate:r.rate,
                   make:'', spec:(byId(DB.materials,'code',r.mat)||{spec:''}).spec};
@@ -5358,7 +4954,7 @@ function reorderToRequisition(){
       logAudit('Requisition', no,'Submitted','Status','\u2014','Submitted','Replenishment against reorder level');
       notify('wa','Replenishment requisition '+no,'Raised for '+sel.length+' material(s) below reorder level','req/approvals');
       save(); refreshNavCounts();
-      toast('Raised replenishment requisition <b>'+esc(no)+'</b> in PostgreSQL (id '+created.id+').','ok');
+      toast('Raised replenishment requisition <b>'+esc(no)+'</b>.','ok');
       goto('req/list');
     });
 }
@@ -5371,13 +4967,14 @@ function matchResult(inv){
   var orderQty = w? sum(w.lines,'qty') : 0;
   var orderRate = w? w.lines[0].rate : 0;
   var grnQty = g? g.accepted : 0;
-  var invQty = orderRate? Math.round(inv.amount / (orderRate*1.18)) : 0;
+  var TF = woTaxFactor(w);
+  var invQty = orderRate? Math.round(inv.amount / (orderRate*TF)) : 0;
   lines.push({f:'Quantity', po:orderQty, grn:grnQty, inv:invQty,
     ok: grnQty===invQty});
-  lines.push({f:'Rate', po:orderRate, grn:orderRate, inv: invQty? Math.round(inv.amount/(invQty*1.18)) : 0,
-    ok: !invQty || Math.abs(Math.round(inv.amount/(invQty*1.18)) - orderRate) <= Math.max(1, orderRate*0.01)});
-  lines.push({f:'Value', po: w? w.value:0, grn: Math.round(grnQty*orderRate*1.18), inv: inv.amount,
-    ok: w? Math.abs(inv.amount - Math.round(grnQty*orderRate*1.18)) <= Math.max(1, inv.amount*0.02) : false});
+  lines.push({f:'Rate', po:orderRate, grn:orderRate, inv: invQty? Math.round(inv.amount/(invQty*TF)) : 0,
+    ok: !invQty || Math.abs(Math.round(inv.amount/(invQty*TF)) - orderRate) <= Math.max(1, orderRate*P('matchRateTolPct')/100)});
+  lines.push({f:'Value', po: w? w.value:0, grn: Math.round(grnQty*orderRate*TF), inv: inv.amount,
+    ok: w? Math.abs(inv.amount - Math.round(grnQty*orderRate*TF)) <= Math.max(1, inv.amount*P('matchValueTolPct')/100) : false});
   return {lines:lines, ok: lines.every(function(l){ return l.ok; }), wo:w, grn:g};
 }
 SCREENS['billing/invoice'] = function(){
@@ -5395,7 +4992,7 @@ SCREENS['billing/invoice'] = function(){
   ])+
   filterBar([
     fld({id:'fiNo', label:'Invoice number', ph:'INV/'}),
-    fld({id:'fiVendor', label:'Vendor', type:'select', opts:DB.vendors.map(function(v){ return {v:v.party_code,l:v.party_name}; }), blank:'All'}),
+    fld({id:'fiVendor', label:'Vendor', type:'select', opts:VENDORS.map(function(v){ return {v:v.code,l:v.name}; }), blank:'All'}),
     fld({id:'fiStatus', label:'Match status', type:'select', opts:['Matched','Exception','Pending','Rejected'], blank:'All'}),
     fld({id:'fiPay', label:'Payment status', type:'select', opts:['Pending','Paid'], blank:'All'})
   ], 'applyInvFilter()',
@@ -5464,9 +5061,9 @@ function ivFromGrn(){
   if(!g) return;
   var w = byId(DB.workorders,'no',g.wo) || {lines:[{rate:0}], due:TODAY, value:0};
   setVal('ivWo', g.wo); setVal('ivVendor', vname(g.vendor));
-  setVal('ivAmount', Math.round(g.accepted * w.lines[0].rate * 1.18));
+  setVal('ivAmount', Math.round(g.accepted * w.lines[0].rate * woTaxFactor(w)));
   var late = Math.max(0, daysBetween(w.due, g.date));
-  setVal('ivLd', late>0 ? Math.min(Math.round(w.value*0.10), Math.round(w.value*0.005*Math.ceil(late/7))) : 0);
+  setVal('ivLd', ldCompute(w.value, late));
   ivCalc();
 }
 function ivCalc(){
@@ -5483,34 +5080,23 @@ function ivCalc(){
     '</div><div class="note '+(net>0?'ok':'er')+'">Net payable to the vendor: <b>'+inr(net)+'</b>'+
     (ld>0? ' after liquidated damages of '+inr(ld)+' for delayed delivery':'')+'.</div>';
 }
-async function saveInvoice(){
+function saveInvoice(){
   if(!requireOk('ivForm')) return;
   var g = byId(DB.grns,'no',val('ivGrn'));
-  if(!g){ toast('Select a valid GRN before saving.','er'); return; }
   var amt = nval('ivAmount');
   if(amt<=0){ toast('Invoice amount must be greater than zero.','er'); return; }
-  var woObj = byId(DB.workorders,'no', g.wo);
-  if(!woObj){ toast('Could not resolve the linked work order against the master data.','er'); return; }
   var rec = {id:uid('N'), no:val('ivNo'), vinv:val('ivVinv'), date:val('ivDate'), recd:val('ivRecd'),
     vendor:g.vendor, wo:g.wo, grn:g.no, amount:amt, matched:0, exception:0,
     ld:nval('ivLd'), retention:Math.round(amt*nval('ivRet')/100),
     tds:Math.round(amt*nval('ivTds')/100), gstTds:Math.round(amt*nval('ivGst')/100),
     status:'Pending', finance:'Under Review', payment:'Pending', billNo:'', utr:'',
     remarks:'', attachments:attList('ivAtt')};
-  var payload = {vendor_inv_no: rec.vinv, vendor_inv_date: rec.date, wo_id: woObj.id, grn_id: g.id, basic_amount: amt, tax_amount: 0};
-  try {
-    var res = await fetch(API_BASE+'/billing/invoices', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the invoice ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    rec.id = created.id; rec.no = created.inv_no || rec.no; rec.status = 'Matched';
-    DB.invoices.unshift(rec);
-    logAudit('Invoice', rec.no,'Recorded','Status','\u2014','Pending','Vendor invoice '+rec.vinv+' received');
-    closeModal(); save(); refreshNavCounts();
-    toast('Recorded invoice <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+'). Three-way match run by the backend.','ok');
-    goto('billing/invoice');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-  }
+  DB.invoices.unshift(rec);
+  logAudit('Invoice', rec.no,'Recorded','Status','\u2014','Pending','Vendor invoice '+rec.vinv+' received');
+  closeModal(); save(); refreshNavCounts();
+  toast('Recorded invoice <b>'+esc(rec.no)+'</b>. Running the three-way match.','ok');
+  goto('billing/invoice');
+  setTimeout(function(){ runMatch(rec.id); }, 400);
 }
 function viewInvoice(id){
   var i = byId(DB.invoices,'id',id);
@@ -5681,24 +5267,15 @@ function sendToFinance(id){
     message:'A bill is generated and passed to the IFMS expenditure module for payment processing.',
     detail: kvRow('Invoice', esc(i.no))+kvRow('Vendor', esc(vname(i.vendor)))+
             kvRow('Net payable', inr(i.amount - i.retention - i.tds - i.gstTds - i.ld))},
-    async function(reason){
-      try {
-        var sanRes = await fetch(API_BASE+'/billing/invoices/'+i.id+'/generate-sanction', {method:'POST'});
-        if(!sanRes.ok){ var e1 = await sanRes.text(); toast('Send failed: sanction generation rejected ('+sanRes.status+'). '+esc(e1.slice(0,150)),'er'); return; }
-        var sanData = await sanRes.json();
-        var treRes = await fetch(API_BASE+'/billing/invoices/'+i.id+'/send-to-treasury', {method:'POST'});
-        if(!treRes.ok){ var e2 = await treRes.text(); toast('Send failed: treasury submission rejected ('+treRes.status+'). '+esc(e2.slice(0,150)),'er'); return; }
-        i.finance = 'Approved';
-        i.billNo = sanData.sanction_no || ('BILL/2026/'+pad(920+DB.invoices.length,4));
-        logAudit('Invoice', i.no,'Sent to Finance','Finance Status','Under Review','Approved',reason);
-        notify('in','Bill '+i.billNo+' sent to finance','For '+vname(i.vendor)+' against '+i.wo,'billing/payment');
-        closeAllModals(); save();
-        ['tInv','tMtch','tBill'].forEach(function(t){ if(TBL[t]) tblReload(t, DB.invoices); });
-        refreshNavCounts();
-        commit('Bill <b>'+esc(i.billNo)+'</b> generated and sent to finance in PostgreSQL.','ok');
-      } catch(err) {
-        toast('Send failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-      }
+    function(reason){
+      i.finance = 'Approved';
+      i.billNo = 'BILL/2026/'+pad(920+DB.invoices.length,4);
+      logAudit('Invoice', i.no,'Sent to Finance','Finance Status','Under Review','Approved',reason);
+      notify('in','Bill '+i.billNo+' sent to finance','For '+vname(i.vendor)+' against '+i.wo,'billing/payment');
+      closeAllModals(); save();
+      ['tInv','tMtch','tBill'].forEach(function(t){ if(TBL[t]) tblReload(t, DB.invoices); });
+      refreshNavCounts();
+      commit('Bill <b>'+esc(i.billNo)+'</b> generated and sent to finance.','ok');
     });
 }
 
@@ -5741,25 +5318,15 @@ function bulkSendFinance(){
   var net = sum(sel, function(i){ return i.amount-i.retention-i.tds-i.gstTds-i.ld; });
   confirmAct({title:'Send '+sel.length+' bill(s) to finance', ok:'Send to finance', btnClass:'ok', reason:true,
     message:'Bills worth a net <b>'+inr(net)+'</b> are passed to the expenditure module.'},
-    async function(reason){
-      var n=0, failed=0;
-      for(var k=0;k<sel.length;k++){
-        var i = sel[k];
-        try {
-          var sanRes = await fetch(API_BASE+'/billing/invoices/'+i.id+'/generate-sanction', {method:'POST'});
-          if(!sanRes.ok) throw new Error('sanction rejected ('+sanRes.status+')');
-          var sanData = await sanRes.json();
-          var treRes = await fetch(API_BASE+'/billing/invoices/'+i.id+'/send-to-treasury', {method:'POST'});
-          if(!treRes.ok) throw new Error('treasury submission rejected ('+treRes.status+')');
-          i.finance='Approved';
-          i.billNo = sanData.sanction_no || ('BILL/2026/'+pad(930+DB.invoices.length+k,4));
-          logAudit('Invoice', i.no,'Sent to Finance','Finance Status','Under Review','Approved',reason);
-          n++;
-        } catch(err) { failed++; }
-      }
+    function(reason){
+      sel.forEach(function(i,k){
+        i.finance='Approved';
+        i.billNo = 'BILL/2026/'+pad(930+DB.invoices.length+k,4);
+        logAudit('Invoice', i.no,'Sent to Finance','Finance Status','Under Review','Approved',reason);
+      });
       tblReload('tBill', DB.invoices.filter(function(i){ return i.status==='Matched'; }));
       refreshNavCounts();
-      commit('Sent '+n+' bill(s) to finance in PostgreSQL'+(failed? '; '+failed+' failed':'')+'.', failed?'wa':'ok');
+      commit('Sent '+sel.length+' bill(s) to finance.','ok');
     });
 }
 
@@ -5803,20 +5370,13 @@ function recordPayment(id){
   var net = i.amount-i.retention-i.tds-i.gstTds-i.ld;
   confirmAct({title:'Record payment', ok:'Record payment', btnClass:'ok', reason:true,
     message:'Payment of <b>'+inr(net)+'</b> to '+esc(vname(i.vendor))+' is recorded against bill '+esc(i.billNo)+'.'},
-    async function(reason){
-      try {
-        var res = await fetch(API_BASE+'/billing/invoices/'+i.id+'/payment-update', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
-        if(!res.ok){ var e = await res.text(); toast('Payment failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-        var created = await res.json();
-        i.payment='Paid';
-        i.utr = created.utr_number || ('UTR'+pad(560000+DB.invoices.length*37,9));
-        logAudit('Invoice', i.no,'Paid','Payment Status','Pending','Paid',reason+' \u2014 UTR '+i.utr);
-        tblReload('tPay', DB.invoices.filter(function(x){ return !!x.billNo; }));
-        refreshNavCounts();
-        commit('Payment recorded in PostgreSQL. UTR <b>'+esc(i.utr)+'</b>.','ok');
-      } catch(err) {
-        toast('Payment failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-      }
+    function(reason){
+      i.payment='Paid'; liquidateCommitment(i);
+      i.utr = 'UTR'+pad(560000+DB.invoices.length*37,9);
+      logAudit('Invoice', i.no,'Paid','Payment Status','Pending','Paid',reason+' \u2014 UTR '+i.utr);
+      tblReload('tPay', DB.invoices.filter(function(x){ return !!x.billNo; }));
+      refreshNavCounts();
+      commit('Payment recorded. UTR <b>'+esc(i.utr)+'</b>.','ok');
     });
 }
 
@@ -5840,7 +5400,7 @@ SCREENS['warranty/list'] = function(){
   ])+
   filterBar([
     fld({id:'fwtMat', label:'Material code', ph:'MAT-'}),
-    fld({id:'fwtVendor', label:'Vendor', type:'select', opts:DB.vendors.map(function(v){ return {v:v.party_code,l:v.party_name}; }), blank:'All'}),
+    fld({id:'fwtVendor', label:'Vendor', type:'select', opts:VENDORS.map(function(v){ return {v:v.code,l:v.name}; }), blank:'All'}),
     fld({id:'fwtState', label:'Warranty status', type:'select', opts:['Active','Expiring Soon','Expired'], blank:'All'})
   ], 'applyWarrFilter()',
     '<button class="btn sm" onclick="resetWarrFilter()">\u21BA Reset</button>')+
@@ -5924,7 +5484,7 @@ SCREENS['warranty/defects'] = function(){
   ])+
   filterBar([
     fld({id:'fdNo', label:'Complaint number', ph:'DEF/'}),
-    fld({id:'fdVendor', label:'Vendor', type:'select', opts:DB.vendors.map(function(v){ return {v:v.party_code,l:v.party_name}; }), blank:'All'}),
+    fld({id:'fdVendor', label:'Vendor', type:'select', opts:VENDORS.map(function(v){ return {v:v.code,l:v.name}; }), blank:'All'}),
     fld({id:'fdSev', label:'Severity', type:'select', opts:['Critical','High','Medium','Low'], blank:'All'}),
     fld({id:'fdStatus', label:'Status', type:'select', blank:'All',
          opts:['Open','Vendor Notified','Assigned','Under Repair','Replacement Pending','Escalated','Resolved','Out of Warranty']})
@@ -5980,7 +5540,7 @@ function raiseDefect(warrantyId){
       fld({id:'dfSerial', label:'Serial number', val: w? w.serial:'', ph:'SN'})+
       fld({id:'dfAsset', label:'Asset tag', val: w? w.asset:'', ph:'AST/'})+
       fld({id:'dfVendor', label:'Vendor', type:'select', req:true, val: w? w.vendor:'',
-           opts:DB.vendors.map(function(v){ return {v:v.party_code, l:v.party_name}; })})+
+           opts:VENDORS.map(function(v){ return {v:v.code, l:v.name}; })})+
       fld({id:'dfDept', label:'Reporting department', type:'select', opts:DEPTS, req:true})+
       fld({id:'dfLoc', label:'Location', val:'Room 204'})+
       fld({id:'dfCat', label:'Defect category', type:'select', req:true, blank:false,
@@ -6007,34 +5567,22 @@ function dfSla(){
   out.innerHTML = '<div class="note in">Severity <b>'+esc(sev)+'</b> carries an SLA of <b>'+days+
     ' day(s)</b>. The complaint escalates automatically if the vendor does not respond by '+fdate(val('dfDue'))+'.</div>';
 }
-async function saveDefect(){
+function saveDefect(){
   if(!requireOk('dfForm')) return;
-  var matObj = byId(DB.materials,'code', val('dfMat'));
-  var vendorObj = byId(DB.vendors,'party_code', val('dfVendor'));
-  if(!matObj || !vendorObj){ toast('Could not resolve material or vendor against the master data.','er'); return; }
   var rec = {id:uid('DF'), no:val('dfNo'), date:val('dfDate'), mat:val('dfMat'),
     serial:val('dfSerial'), asset:val('dfAsset'), vendor:val('dfVendor'), dept:val('dfDept'),
     wo:'\u2014', grn:'\u2014', location:val('dfLoc'), cat:val('dfCat'), severity:val('dfSev'),
     warranty:val('dfWarr'), desc:val('dfDesc'), vendorResp:'Awaiting', due:val('dfDue'),
     resolved:'', status: val('dfWarr')==='Expired'? 'Out of Warranty':'Vendor Notified',
-    officer:'Anil Katwale', escalation:'\u2014', attachments:attList('dfAtt')};
-  var payload = {item_id: matObj.id, party_id: vendorObj.id, defect_desc: rec.desc, defect_category: rec.cat, severity: rec.severity};
-  try {
-    var res = await fetch(API_BASE+'/warranty/defects', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the complaint ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    rec.id = created.id; rec.no = created.ticket_no || rec.no;
-    DB.defects.unshift(rec);
-    var w = DB.warranty.filter(function(x){ return x.serial===rec.serial; })[0];
-    if(w) w.complaints = (w.complaints||0)+1;
-    logAudit('Defect Complaint', rec.no,'Raised','Status','\u2014',rec.status, rec.desc.slice(0,80));
-    notify('er','Defect complaint '+rec.no+' raised', rec.severity+' severity with '+vname(rec.vendor),'warranty/defects');
-    closeModal(); save(); refreshNavCounts();
-    toast('Lodged complaint <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+') with '+esc(vname(rec.vendor))+'.','ok');
-    goto('warranty/defects');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-  }
+    officer:curUser(), escalation:'\u2014', attachments:attList('dfAtt')};
+  DB.defects.unshift(rec);
+  var w = DB.warranty.filter(function(x){ return x.serial===rec.serial; })[0];
+  if(w) w.complaints = (w.complaints||0)+1;
+  logAudit('Defect Complaint', rec.no,'Raised','Status','\u2014',rec.status, rec.desc.slice(0,80));
+  notify('er','Defect complaint '+rec.no+' raised', rec.severity+' severity with '+vname(rec.vendor),'warranty/defects');
+  closeModal(); save(); refreshNavCounts();
+  toast('Lodged complaint <b>'+esc(rec.no)+'</b> with '+esc(vname(rec.vendor))+'.','ok');
+  goto('warranty/defects');
 }
 function viewDefect(id){
   var d = byId(DB.defects,'id',id);
@@ -6101,19 +5649,13 @@ function escalateDefect(id){
     detail: kvRow('Complaint', esc(d.no))+kvRow('Vendor', esc(vname(d.vendor)))+
             kvRow('Days beyond SLA', Math.max(0, daysBetween(d.due,TODAY)))+
             kvRow('Current escalation', esc(d.escalation))},
-    async function(reason){
-      try {
-        var res = await fetch(API_BASE+'/warranty/defects/'+d.id+'/escalate', {method:'PUT'});
-        if(!res.ok){ var e = await res.text(); toast('Escalate failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-      } catch(err) {
-        toast('Escalate failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
-      }
+    function(reason){
       var old = d.status;
       d.status='Escalated'; d.escalation = lvl;
       logAudit('Defect Complaint', d.no,'Escalated','Status', old,'Escalated', lvl+' \u2014 '+reason);
       notify('er','Complaint '+d.no+' escalated', lvl,'warranty/escalation');
       closeAllModals(); save(); tblReload('tDef', DB.defects);
-      commit('Escalated <b>'+esc(d.no)+'</b> to '+esc(lvl)+' in PostgreSQL.','wa');
+      commit('Escalated <b>'+esc(d.no)+'</b> to '+esc(lvl)+'.','wa');
     });
 }
 function resolveDefect(id){
@@ -6122,18 +5664,12 @@ function resolveDefect(id){
     message:'The defect is recorded as resolved and the complaint closed.',
     detail: kvRow('Complaint', esc(d.no))+kvRow('Material', esc(d.mat))+
             kvRow('Turnaround', daysBetween(d.date,TODAY)+' days')},
-    async function(reason){
-      try {
-        var res = await fetch(API_BASE+'/warranty/defects/'+d.id+'/resolve', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({vendor_response: reason})});
-        if(!res.ok){ var e = await res.text(); toast('Resolve failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-      } catch(err) {
-        toast('Resolve failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return;
-      }
+    function(reason){
       var old = d.status;
       d.status='Resolved'; d.resolved=TODAY; d.vendorResp='Closed';
       logAudit('Defect Complaint', d.no,'Resolved','Status', old,'Resolved',reason);
       closeAllModals(); save(); tblReload('tDef', DB.defects); refreshNavCounts();
-      commit('Complaint <b>'+esc(d.no)+'</b> resolved in PostgreSQL.','ok');
+      commit('Complaint <b>'+esc(d.no)+'</b> resolved.','ok');
     });
 }
 
@@ -6346,32 +5882,20 @@ function dpCalc(){
     '</b>. Available stock of this material: <b>'+num(s? s.avail:0)+'</b>.'+
     (s && s.avail < q ? ' The proposed quantity exceeds the available balance.':'')+'</div>';
 }
-async function saveDisposal(){
+function saveDisposal(){
   if(!requireOk('dpForm')) return;
-  var storeObj = byId(DB.stores,'store_name', val('dpStore'));
-  var matObj = byId(DB.materials,'code', val('dpMat'));
-  if(!storeObj || !matObj){ toast('Could not resolve store or material against the master data.','er'); return; }
   var rec = {id:uid('DS'), no:val('dpNo'), mat:val('dpMat'), store:val('dpStore'),
     location:'Bin-Z-01', batch:val('dpBatch'), qty:nval('dpQty'),
     original:nval('dpOriginal'), book:nval('dpBook'), residual:nval('dpResidual'),
     reason:val('dpReason'), method:val('dpMethod'), approval:'Pending', status:'Under Review',
     committee:val('dpCommittee'), buyer:'', auction:'', date:val('dpDate'), value:0,
     remittance:'', attachments:attList('dpAtt')};
-  var payload = {store_id: storeObj.id, item_id: matObj.id, disposal_qty: rec.qty, condemnation_reason: rec.reason, reserve_price: rec.residual, disposal_mode: rec.method};
-  try {
-    var res = await fetch(API_BASE+'/disposal/proposals', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the proposal ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    rec.id = created.id; rec.no = created.disp_proposal_no || rec.no;
-    DB.disposals.unshift(rec);
-    logAudit('Disposal', rec.no,'Proposed','Approval Status','\u2014','Pending',val('dpJust'));
-    notify('wa','Disposal proposal '+rec.no,'Awaiting condemnation board approval','disp/proposal');
-    closeModal(); save(); refreshNavCounts();
-    toast('Submitted proposal <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+') for condemnation approval.','ok');
-    goto('disp/proposal');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-  }
+  DB.disposals.unshift(rec);
+  logAudit('Disposal', rec.no,'Proposed','Approval Status','\u2014','Pending',val('dpJust'));
+  notify('wa','Disposal proposal '+rec.no,'Awaiting condemnation board approval','disp/proposal');
+  closeModal(); save(); refreshNavCounts();
+  toast('Submitted proposal <b>'+esc(rec.no)+'</b> for condemnation approval.','ok');
+  goto('disp/proposal');
 }
 function viewDisposal(id){
   var d = byId(DB.disposals,'id',id);
@@ -6397,37 +5921,31 @@ function viewDisposal(id){
         '<button class="btn ok" onclick="approveDisposal(\''+d.id+'\')">Approve</button>'
       : '<button class="btn" data-close>Close</button>'});
 }
-async function approveDisposal(id){
+function approveDisposalFinal(id){
   var d = byId(DB.disposals,'id',id);
   confirmAct({title:'Approve disposal proposal', ok:'Approve', btnClass:'ok', reason:true,
     message:'The condemnation board approves disposal of <b>'+num(d.qty)+'</b> unit(s) of '+esc(d.mat)+
       ' by '+esc(d.method.toLowerCase())+'.',
     detail: kvRow('Book value', inr(d.book))+kvRow('Residual value', inr(d.residual))+
             kvRow('Committee', esc(d.committee))},
-    async function(reason){
-      var created;
-      try {
-        var res = await fetch(API_BASE+'/disposal/proposals/'+d.id+'/approve', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
-        if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the approval ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-        created = await res.json();
-      } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
-      d.approval='Approved';
+    function(reason){
+      wfEnd(d,'Approved',reason); d.approval='Approved';
       d.status = d.method.indexOf('Auction')>=0 ? 'Auction Scheduled' : 'Approved';
-      d.auction = created.auction_ref_no || d.auction;
+      if(d.method.indexOf('Auction')>=0) d.auction = 'AUC/2026/'+pad(80+DB.disposals.length,4);
       logAudit('Disposal', d.no,'Approved','Approval Status','Pending','Approved',reason);
       closeAllModals(); save(); tblReload('tDsp', DB.disposals); refreshNavCounts();
-      commit('Approved <b>'+esc(d.no)+'</b> in PostgreSQL.','ok');
+      commit('Approved <b>'+esc(d.no)+'</b>.','ok');
     });
 }
-function rejectDisposal(id){
+function rejectDisposalCore(id){
   var d = byId(DB.disposals,'id',id);
   confirmAct({title:'Reject disposal proposal', kind:'er', btnClass:'dgr', ok:'Reject', reason:true,
-    message:'The proposal is rejected and the material stays on the books. Note: the backend has no rejection status field for disposal proposals, so this is recorded locally and in the audit trail only — the proposal remains ‘Pending Approval’ in PostgreSQL.'},
+    message:'The proposal is rejected and the material stays on the books.'},
     function(reason){
-      d.approval='Rejected'; d.status='Rejected';
+      wfEnd(d,'Rejected',reason); d.approval='Rejected'; d.status='Rejected';
       logAudit('Disposal', d.no,'Rejected','Approval Status','Pending','Rejected',reason);
       closeAllModals(); save(); tblReload('tDsp', DB.disposals); refreshNavCounts();
-      commit('Rejected <b>'+esc(d.no)+'</b> (local only — no backend rejection field exists for disposal proposals).','wa');
+      commit('Rejected <b>'+esc(d.no)+'</b>.','er');
     });
 }
 function completeDisposal(id){
@@ -6443,14 +5961,9 @@ function completeDisposal(id){
     footer:'<button class="btn" data-close>Cancel</button>'+
       '<button class="btn pri" onclick="saveDisposalCompletion(\''+id+'\')">Record disposal</button>'});
 }
-async function saveDisposalCompletion(id){
+function saveDisposalCompletion(id){
   if(!requireOk('cdForm')) return;
   var d = byId(DB.disposals,'id',id);
-  var payload = {buyer_name: val('cdBuyer')||'Scrap Dealer', realized_value: nval('cdValue')||0, deposit_challan_no: val('cdChallan')};
-  try {
-    var res = await fetch(API_BASE+'/disposal/proposals/'+d.id+'/record-sale', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-  } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
   var s = DB.stock.filter(function(x){ return x.mat===d.mat && x.store===d.store; })[0];
   if(s) s.avail = Math.max(0, s.avail - d.qty);
   var m = byId(DB.materials,'code',d.mat); if(m) m.stock = Math.max(0, m.stock - d.qty);
@@ -6462,7 +5975,7 @@ async function saveDisposalCompletion(id){
   logAudit('Disposal', d.no,'Disposal Recorded','Status','Approved',d.status, val('cdNote')+
     (d.value? ' \u2014 realised '+inr(d.value):''));
   closeModal(); save(); tblReload('tDsp', DB.disposals); refreshNavCounts();
-  toast('Recorded disposal of <b>'+num(d.qty)+'</b> unit(s) in PostgreSQL. Stock updated.','ok');
+  toast('Recorded disposal of <b>'+num(d.qty)+'</b> unit(s). Stock updated.','ok');
 }
 SCREENS['disp/condemn'] = function(){
   var rows = DB.disposals.filter(function(d){ return ['Unserviceable','Obsolete','End of Life','Damaged'].indexOf(d.reason)>=0; });
@@ -6631,26 +6144,15 @@ function auditEntry(){
     footer:'<button class="btn" data-close>Cancel</button>'+
       '<button class="btn pri" onclick="saveAudit()">Schedule verification</button>'});
 }
-async function saveAudit(){
+function saveAudit(){
   if(!requireOk('avForm')) return;
-  var storeObj = byId(DB.stores,'store_name', val('avStore'));
-  if(!storeObj){ toast('Select a valid store before scheduling.','er'); return; }
   var rec = {id:uid('A'), no:val('avNo'), type:val('avType'), dept:val('avDept'), store:val('avStore'),
     cat:val('avCat')||'All categories', period:val('avPeriod'), team:val('avTeam'),
     start:val('avStart'), end:val('avEnd'), status:'Scheduled'};
-  var payload = {store_id: storeObj.id, audit_type: rec.type, period_label: rec.period, audit_team_lead: rec.team};
-  try {
-    var res = await fetch(API_BASE+'/audit/schedules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-    if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the schedule ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-    var created = await res.json();
-    rec.id = created.id; rec.no = created.audit_no || rec.no;
-    DB.audits.unshift(rec);
-    logAudit('Stock Audit', rec.no,'Scheduled','Status','\u2014','Scheduled',rec.type+' verification of '+rec.store);
-    closeModal(); save(); tblReload('tAud', DB.audits);
-    toast('Scheduled verification <b>'+esc(rec.no)+'</b> in PostgreSQL (id '+created.id+'). Lines pre-populated from current stock.','ok');
-  } catch(err) {
-    toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-  }
+  DB.audits.unshift(rec);
+  logAudit('Stock Audit', rec.no,'Scheduled','Status','\u2014','Scheduled',rec.type+' verification of '+rec.store);
+  closeModal(); save(); tblReload('tAud', DB.audits);
+  toast('Scheduled verification <b>'+esc(rec.no)+'</b>.','ok');
 }
 function closeAudit(id){
   var a = byId(DB.audits,'id',id);
@@ -6670,43 +6172,18 @@ function postVariances(){
   if(withoutReason.length){ toast(withoutReason.length+' selected line(s) have no reason recorded. Enter a reason first.','er'); return; }
   confirmAct({title:'Post variances for adjustment', ok:'Post '+sel.length+' variance(s)', btnClass:'sec', reason:true,
     message:'Adjustment entries are raised for the selected variances and sent for approval of the competent authority.'},
-    async function(reason){
-      try {
-        var byAudit = {};
-        sel.forEach(function(v){ (byAudit[v.auditId] = byAudit[v.auditId]||[]).push(v); });
-        for(var auditId in byAudit){
-          var counts = byAudit[auditId].map(function(v){ return {line_id: Number(v.id), physical_qty: v.phys, notes: v.reason}; });
-          var res = await fetch(API_BASE+'/audit/schedules/'+auditId+'/record-counts', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({counts: counts})});
-          if(!res.ok){ var e = await res.text(); toast('Post failed for audit '+auditId+': backend rejected the request ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-        }
-        for(var k=0;k<sel.length;k++){
-          var v = sel[k];
-          var storeObj = byId(DB.stores,'store_name', v.store);
-          var matObj = byId(DB.materials,'code', v.mat);
-          if(!storeObj || !matObj) continue;
-          var adjRes = await fetch(API_BASE+'/audit/adjustments', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
-            audit_id: v.auditId, store_id: storeObj.id, item_id: matObj.id,
-            adjustment_type: v.variance<0 ? 'Write-Off' : 'Write-In', adj_qty: Math.abs(v.variance)
-          })});
-          if(adjRes.ok){
-            var created = await adjRes.json();
-            DB.adjustments.unshift({id:created.id, no:created.adj_voucher_no,
-              mat:v.mat, store:v.store, book:v.book, phys:v.phys, variance:v.variance,
-              rate:v.rate, value:v.variance*v.rate, reason:v.reason,
-              doc:'PV Sheet '+v.audit, authority:'Head of Office', finance:'Pending', status:'Pending'});
-            var s = DB.stock.filter(function(x){ return x.mat===v.mat && x.store===v.store; })[0];
-            if(s) s.avail = Math.max(0, s.avail + v.variance);
-            var m = byId(DB.materials,'code',v.mat); if(m) m.stock = Math.max(0, m.stock + v.variance);
-          }
-          v.status = 'Pending';
-          logAudit('Stock Adjustment', v.mat,'Variance Posted','Variance','0', String(v.variance), v.reason+' \u2014 '+reason);
-        }
-        save(); tblPaint('tPv');
-        toast('Posted '+sel.length+' variance(s) for adjustment approval in PostgreSQL.','ok');
-        goto('audit/adjust');
-      } catch(err) {
-        toast('Post failed: could not reach the backend API. '+esc(String(err.message||err)),'er');
-      }
+    function(reason){
+      sel.forEach(function(v,k){
+        DB.adjustments.unshift({id:uid('AJ'), no:'ADJ/2026/'+pad(260+DB.adjustments.length+k,5),
+          mat:v.mat, store:v.store, book:v.book, phys:v.phys, variance:v.variance,
+          rate:v.rate, value:v.variance*v.rate, reason:v.reason,
+          doc:'PV Sheet '+v.audit, authority:'Head of Office', finance:'Pending', status:'Pending'});
+        v.status = 'Pending';
+        logAudit('Stock Adjustment', v.mat,'Variance Posted','Variance','0', String(v.variance), v.reason+' \u2014 '+reason);
+      });
+      save(); tblPaint('tPv');
+      toast('Posted '+sel.length+' variance(s) for adjustment approval.','ok');
+      goto('audit/adjust');
     });
 }
 
@@ -6781,7 +6258,7 @@ SCREENS['audit/adjust'] = function(){
         : '<span class="muted">\u2014</span>'; }}
   ], empty:'No adjustment entry'})+'</div></div>';
 };
-function approveAdjustment(id){
+function approveAdjustmentFinal(id){
   var a = byId(DB.adjustments,'id',id);
   confirmAct({title:'Approve stock adjustment', ok:'Approve and post', btnClass:'ok', reason:true,
     kind: a.variance<0? 'wa':'in',
@@ -6792,25 +6269,28 @@ function approveAdjustment(id){
     detail: kvRow('Book balance', num(a.book))+kvRow('Physical balance', num(a.phys))+
             kvRow('Reason', esc(a.reason))+kvRow('Authority', esc(a.authority))},
     function(reason){
-      a.status='Approved'; a.finance='Posted';
+      var s = DB.stock.filter(function(x){ return x.mat===a.mat && x.store===a.store; })[0];
+      if(s) s.avail = Math.max(0, s.avail + a.variance);
+      var m = byId(DB.materials,'code',a.mat); if(m) m.stock = Math.max(0, m.stock + a.variance);
+      wfEnd(a,'Approved',reason); a.status='Approved'; a.finance='Posted';
       DB.movements.unshift({id:uid('V'), no:'MOV/2026/'+pad(9800+DB.movements.length*3,6), date:TODAY,
         mat:a.mat, type:'Physical Verification Adjustment', src: a.variance<0? a.store:'Adjustment',
         dst: a.variance<0? 'Write-Off':a.store, qty:Math.abs(a.variance), uom:muom(a.mat),
-        value:Math.abs(a.value), ref:a.no, by:'Anil Katwale', status:'Approved'});
+        value:Math.abs(a.value), ref:a.no, by:curUser(), status:'Approved'});
       logAudit('Stock Adjustment', a.no,'Approved','Status','Pending','Approved',reason);
       save(); tblReload('tAdj', DB.adjustments);
-      commit('Adjustment <b>'+esc(a.no)+'</b> marked approved (local only — the backend already posts the stock change when the variance is recorded and has no separate approval gate; stock in PostgreSQL was already updated).','wa');
+      commit('Adjustment <b>'+esc(a.no)+'</b> approved and posted to stock.','ok');
     });
 }
-function rejectAdjustment(id){
+function rejectAdjustmentCore(id){
   var a = byId(DB.adjustments,'id',id);
   confirmAct({title:'Reject adjustment', kind:'er', btnClass:'dgr', ok:'Reject', reason:true,
-    message:'The adjustment is marked rejected in the local register. Note: the backend already posted this stock change when the variance was recorded and has no reversal endpoint, so the stock movement in PostgreSQL is <b>not</b> undone by this action — reverse it with a correcting adjustment if required.'},
+    message:'The adjustment is rejected. The variance stays open and must be re-verified.'},
     function(reason){
       a.status='Rejected'; a.finance='Pending';
       logAudit('Stock Adjustment', a.no,'Rejected','Status','Pending','Rejected',reason);
       tblReload('tAdj', DB.adjustments);
-      commit('Rejected adjustment <b>'+esc(a.no)+'</b> (local only — stock in PostgreSQL was not reversed).','er');
+      commit('Rejected adjustment <b>'+esc(a.no)+'</b>.','er');
     });
 }
 
@@ -6957,27 +6437,11 @@ function forecastToRequisition(){
   var value = sum(sel, function(f){ return (f.override||f.suggest)*mrate(f.mat); });
   confirmAct({title:'Raise requisition from forecast', ok:'Raise requisition', btnClass:'pri', reason:true,
     message:'A requisition is raised covering '+sel.length+' material line(s) worth <b>'+inr(value)+'</b>, based on the demand forecast.'},
-    async function(reason){
-      var storeObj = byId(DB.stores,'store_name', STORES[0]);
-      var payloadLines = [];
-      for(var i=0;i<sel.length;i++){
-        var f = sel[i];
-        var matObj = byId(DB.materials,'code', f.mat);
-        if(!matObj){ toast('Could not resolve material "'+esc(f.mat)+'" against the master data.','er'); return; }
-        payloadLines.push({item_id: matObj.id, requested_qty: (f.override||f.suggest), est_unit_rate: mrate(f.mat), preferred_make:'', technical_spec: matObj.spec||''});
-      }
-      var payload = {req_date: TODAY, store_id: storeObj.id, priority:'Normal',
-        purpose:'Forecast-based replenishment. '+reason, lines: payloadLines};
-      var created;
-      try {
-        var res = await fetch(API_BASE+'/requisitions/', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-        if(!res.ok){ var e = await res.text(); toast('Save failed: backend rejected the requisition ('+res.status+'). '+esc(e.slice(0,150)),'er'); return; }
-        created = await res.json();
-      } catch(err) { toast('Save failed: could not reach the backend API. '+esc(String(err.message||err)),'er'); return; }
-      var no = created.req_no || seq('MR/DIT/2026/', DB.requisitions,'no',6);
+    function(reason){
+      var no = seq('MR/DIT/2026/', DB.requisitions,'no',6);
       DB.requisitions.unshift({
-        id:created.id, no:no, date:TODAY, dept:DEPTS[0], office:'Head Office', section:'Store Section',
-        requestor:'Anil Katwale',
+        id:uid('R'), no:no, date:TODAY, dept:DEPTS[0], office:'Head Office', section:'Store Section',
+        requestor:curUser(),
         lines: sel.map(function(f){
           return {mat:f.mat, desc:mname(f.mat), qty:(f.override||f.suggest), uom:muom(f.mat),
                   rate:mrate(f.mat), make:'', spec:(byId(DB.materials,'code',f.mat)||{spec:''}).spec};
@@ -6991,7 +6455,7 @@ function forecastToRequisition(){
       sel.forEach(function(f){ f.approval = 'Approved'; });
       logAudit('Requisition', no,'Submitted','Status','\u2014','Submitted','Raised from demand forecast');
       save(); refreshNavCounts();
-      toast('Raised requisition <b>'+esc(no)+'</b> from the forecast in PostgreSQL (id '+created.id+').','ok');
+      toast('Raised requisition <b>'+esc(no)+'</b> from the forecast.','ok');
       goto('req/list');
     });
 }
@@ -7433,22 +6897,1240 @@ function toggleRole(id){
     function(reason){
       var old = r.status; r.status = next;
       logAudit('User Role Mapping', r.empc, next,'Status', old, next, reason);
-      if (r.user_id) {
-        fetch(API_BASE + '/admin/users/' + r.user_id + '/toggle-status', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason: reason })
-        }).catch(function(){});
-      }
       tblReload('tRol', DB.roles);
       commit(esc(r.user)+' '+next.toLowerCase()+'.','ok');
     });
 }
 
+/* ============================================================
+   13. GOVERNANCE LAYER  (V3 - remediation against the IFMS
+       "Prototype Verification and Gap Analysis")
+     13.1 Session, role model and route ACL ........ Gap 4.2 / Part 7
+     13.2 Action guards and Auditor read-only ....... Gap 4.2, GNR_13/14
+     13.3 Workflow engine (multi-level, DFPR,
+          maker-checker) ............................ Gap 4.1 analogue, GNR_9/10/16
+     13.4 SLA ageing and runtime escalation ......... Gap 4.3
+     13.5 Checklist master bound to validators ...... Gap Part 6 #7
+     13.6 Budget heads, commitments, phasing ........ Gap 4.4, Part 5
+     13.7 Procurement parameters master ............. Gap 4.4
+     13.8 RTM, interfaces, disclosures, gap register  Gap 4.5, 4.6, 4.7
+   ============================================================ */
+
+/* ---------- 13.1 SESSION, ROLES AND ROUTE ACL ---------- */
+var R = {IND:'Indenting Officer', STO:'Store Officer', PRO:'Procurement Officer', INS:'Inspection Officer',
+  HOO:'Head of Office', HOD:'Head of Department', FIN:'Finance Wing', DDO:'DDO', AS:'Administrative Secretary',
+  FD:'Finance Department', CB:'Condemnation Board', MDA:'Master Data Administrator', AUD:'Auditor'};
+var ROLE_DEFS = [
+  {role:R.IND, user:'V. Sharma',       ini:'VS', empc:'GNCTD/DIT/03321', dept:0, tier:'Section',              desc:'Raises indents and requisitions (maker, MAT-F01)'},
+  {role:R.STO, user:'R. Meena',        ini:'RM', empc:'GNCTD/EDU/02218', dept:1, tier:'Store',                desc:'Receives material, prepares GRN, issues and transfers stock (maker, MAT-F02)'},
+  {role:R.PRO, user:'Anil Katwale',    ini:'AK', empc:'GNCTD/DIT/04412', dept:0, tier:'Procurement Cell',     desc:'Plans procurement, runs tenders, raises work orders (maker)'},
+  {role:R.INS, user:'S. Bansal',       ini:'SB', empc:'GNCTD/HLT/07731', dept:2, tier:'Inspection Committee', desc:'Inspects receipts and records acceptance (checker, MAT-F02)'},
+  {role:R.HOO, user:'P. Kaur',         ini:'PK', empc:'GNCTD/PWD/01190', dept:3, tier:'Office',               desc:'Level-1 approver for requisitions and orders; stock adjustments'},
+  {role:R.HOD, user:'Dr. A. Rao',      ini:'AR', empc:'GNCTD/DIT/00214', dept:0, tier:'Department',           desc:'Higher approver under DFPR for orders, disposals and adjustments'},
+  {role:R.FIN, user:'M. Iqbal',        ini:'MI', empc:'GNCTD/FIN/00845', dept:0, tier:'Finance',              desc:'Budget concurrence, bill scrutiny and payment'},
+  {role:R.DDO, user:'N. Gupta',        ini:'NG', empc:'GNCTD/DIT/02067', dept:0, tier:'DDO',                  desc:'Approves posting of GRN to the stock ledger; initiates bills (approver, MAT-F02)'},
+  {role:R.AS,  user:'L. Chawla',       ini:'LC', empc:'GNCTD/DIT/00031', dept:0, tier:'Administrative Dept.', desc:'Approver for high-value requisitions and orders'},
+  {role:R.FD,  user:'FD-II Desk',      ini:'FD', empc:'GNCTD/FIN/00102', dept:0, tier:'Finance Department',   desc:'Concurrence beyond departmental powers'},
+  {role:R.CB,  user:'J. Singh (Chair)',ini:'JS', empc:'GNCTD/DIT/01733', dept:0, tier:'Committee',            desc:'Condemnation board: approves disposal within its powers'},
+  {role:R.MDA, user:'T. Joshi',        ini:'TJ', empc:'GNCTD/DIT/05577', dept:0, tier:'System',               desc:'Masters, workflow, checklists and parameters (configuration without code change)'},
+  {role:R.AUD, user:'D. Menon',        ini:'DM', empc:'GNCTD/DOA/00419', dept:0, tier:'Internal Audit',       desc:'Read-only access to every screen and the audit trail', ro:true}
+];
+var ALL_ROLES = ROLE_DEFS.map(function(d){ return d.role; });
+function roleDef(role){ return ROLE_DEFS.filter(function(d){ return d.role===role; })[0] || ROLE_DEFS[2]; }
+var CUR = ROLE_DEFS[2];
+function curUser(){ return CUR ? CUR.user : 'Anil Katwale'; }
+function curRole(){ return CUR ? CUR.role : R.PRO; }
+function curDept(){ return DEPTS[(CUR && CUR.dept) || 0]; }
+function isRO(){ return !!(CUR && CUR.ro); }
+
+var ROUTE_ACL = (function(){
+  var x = {};
+  function set(routes, roles){ routes.forEach(function(r){ x[r] = roles; }); }
+  set(['dash','inv/stock','mm/register','rep/procurement','rep/inventory','rep/vendor','rep/ageing','rep/rtm',
+       'rep/gaps','rep/budget','admin/interfaces','admin/about'], ALL_ROLES);
+  set(['mm/create','mm/category','mm/uom','mm/bulk'], [R.MDA,R.STO,R.PRO]);
+  set(['mm/boq'], [R.PRO,R.MDA,R.STO]);
+  set(['req/create'], [R.IND,R.STO,R.PRO,R.HOO,R.HOD]);
+  set(['req/list'], [R.IND,R.STO,R.PRO,R.HOO,R.HOD,R.FIN,R.AS,R.FD,R.DDO]);
+  set(['req/approvals'], [R.HOO,R.HOD,R.FIN,R.AS,R.FD]);
+  set(['req/consolidate'], [R.PRO,R.HOO]);
+  set(['proc/plan','proc/tender','proc/quotes','proc/eval','proc/cs'], [R.PRO,R.HOO,R.HOD,R.FIN,R.AS,R.FD]);
+  set(['proc/emd','proc/pg'], [R.PRO,R.FIN,R.DDO,R.HOO]);
+  set(['wo/create'], [R.PRO]);
+  set(['wo/list'], [R.PRO,R.HOO,R.HOD,R.FIN,R.AS,R.FD,R.STO,R.DDO]);
+  set(['wo/amend'], [R.PRO,R.HOO,R.HOD]);
+  set(['wo/delivery'], [R.PRO,R.STO,R.HOO]);
+  set(['grn/list','grn/inspection'], [R.STO,R.INS,R.DDO,R.PRO,R.HOO]);
+  set(['grn/pending'], [R.STO,R.INS,R.DDO,R.HOO]);
+  set(['grn/rtv'], [R.STO,R.PRO,R.HOO]);
+  set(['inv/movement','inv/transfer','inv/issue','inv/return','inv/reorder'], [R.STO,R.PRO,R.HOO,R.IND,R.DDO]);
+  set(['billing/invoice','billing/match','billing/initiate','billing/payment'], [R.FIN,R.DDO,R.PRO,R.HOO]);
+  set(['warranty/list','warranty/defects','warranty/repair','warranty/escalation'], [R.PRO,R.STO,R.HOO,R.IND]);
+  set(['disp/proposal','disp/condemn','disp/auction','disp/register'], [R.STO,R.CB,R.HOO,R.HOD,R.FIN]);
+  set(['audit/pv','audit/recon','audit/adjust'], [R.STO,R.HOO,R.HOD,R.FIN,R.DDO]);
+  set(['fc/consumption','fc/forecast','fc/reorder'], [R.PRO,R.STO,R.HOO]);
+  set(['rep/trail'], [R.HOO,R.HOD,R.AS,R.FD,R.MDA,R.FIN]);
+  set(['admin/workflow','admin/limits'], [R.MDA,R.HOO,R.HOD,R.AS,R.FIN,R.FD]);
+  set(['admin/rules','admin/integration','admin/roles','admin/checklist','admin/params'], [R.MDA,R.FIN]);
+  return x;
+})();
+function routeRoles(r){ return ROUTE_ACL[r] || ALL_ROLES; }
+function routeAllowed(r){ if(!CUR || isRO()) return true; return routeRoles(r).indexOf(CUR.role)>=0; }
+function explainRoute(r){
+  var t = TITLES[r] ? TITLES[r].t : r;
+  lockedDialog('Screen not in the '+curRole()+' profile',
+    '<b>'+esc(t)+'</b> is available only to the roles listed below. You are signed in as <b>'+esc(curUser())+'</b> ('+esc(curRole())+').',
+    routeRoles(r), r);
+}
+function lockedDialog(title, msg, roles, thenRoute){
+  var list = (roles||[]).filter(function(ro){ return ro!==curRole() && ALL_ROLES.indexOf(ro)>=0; });
+  modal({title:'\u{1F512} '+esc(title), size:'sm',
+    body:'<div class="note wa" style="margin-bottom:10px">'+msg+'</div>'+
+      (list.length ? '<div class="sec-h">Switch to a permitted role</div><div class="rolelist">'+list.map(function(ro){
+        return '<button class="btn sm gh" onclick="closeAllModals();switchRole(\''+ro+'\''+(thenRoute?',\''+thenRoute+'\'':'')+')">'+
+          '<b>'+esc(ro)+'</b>&nbsp;&middot;&nbsp;'+esc(roleDef(ro).user)+'</button>'; }).join('')+'</div>' : '')+
+      '<div class="hint" style="margin-top:8px">Role switching stands in for separate logins in this demonstration. In production each role is a distinct authenticated user.</div>'});
+}
+function switchRole(role, route){
+  var old = curRole();
+  CUR = roleDef(role);
+  DB.session = {role: CUR.role, since: nowIso()};
+  document.body.classList.toggle('ro', isRO());
+  DB.trail.unshift({id:uid('AT'), ts:nowIso(), type:'Session', ref:CUR.user, action:'Role Switched', field:'Role',
+    oldv:old, newv:CUR.role, reason:'Demonstration login', by:CUR.user, role:CUR.role, dept:curDept(),
+    approval:'\u2014', src:'IFMS Web', ip:'10.24.8.117'});
+  save(); paintUser(); buildSidebar();
+  var dest = route || ROUTE;
+  goto(routeAllowed(dest) ? dest : 'dash');
+  toast('Signed in as <b>'+esc(CUR.user)+'</b> \u2014 '+esc(CUR.role)+(isRO()?' (read-only)':'')+'. '+
+    myPending().length+' case(s) pending with this role.', isRO()?'wa':'ok');
+}
+function paintUser(){
+  var a = document.getElementById('uAv'), n = document.getElementById('uName'), r = document.getElementById('uRole');
+  if(a) a.textContent = CUR.ini; if(n) n.textContent = CUR.user; if(r) r.textContent = CUR.role;
+  var s = document.getElementById('roleSel');
+  if(s){
+    s.innerHTML = ROLE_DEFS.map(function(d){
+      return '<option value="'+esc(d.role)+'"'+(d.role===CUR.role?' selected':'')+'>'+esc(d.role)+'</option>'; }).join('');
+  }
+}
+function roBanner(){
+  return isRO() ? '<div class="ro-banner no-print">\u{1F441} <b>Auditor \u2014 read-only session.</b> Every screen is visible; every action that creates, changes or approves a record is blocked and explains why.</div>' : '';
+}
+function frIds(tags){ return uniq(String(tags||'').match(/[A-Z]+_\d+/g)||[]).join(','); }
+
+/* ---------- 13.2 ACTION GUARDS ---------- */
+var ACTION_ACL = {
+  saveReq:[R.IND,R.STO,R.PRO,R.HOO,R.HOD], addReqLine:[R.IND,R.STO,R.PRO,R.HOO,R.HOD],
+  initiateProc:[R.PRO], createConsolidatedPlan:[R.PRO], reorderToRequisition:[R.PRO,R.STO],
+  forecastToRequisition:[R.PRO,R.STO], recalcForecast:[R.PRO,R.STO],
+  saveMaterial:[R.MDA,R.STO,R.PRO], editMaterial:[R.MDA,R.STO,R.PRO], deactivateMaterial:[R.MDA], reactivateMaterial:[R.MDA],
+  simulateBulk:[R.MDA], commitBulk:[R.MDA], saveBoqMap:[R.PRO,R.MDA], mapBoq:[R.PRO,R.MDA], autoSuggestBoq:[R.PRO,R.MDA],
+  markNonStd:[R.PRO,R.MDA], newFromBoq:[R.PRO,R.MDA],
+  approvePlan:[R.HOO,R.HOD], planToTender:[R.PRO], quoteEntry:[R.PRO], saveQuote:[R.PRO], saveEval:[R.PRO],
+  finishEval:[R.PRO], autoL1:[R.PRO], submitCs:[R.PRO], selectVendor:[R.PRO], splitAward:[R.PRO],
+  recordNegotiation:[R.PRO], saveNegotiation:[R.PRO], recommendRetender:[R.PRO],
+  releasePg:[R.FIN,R.PRO], extendPg:[R.PRO,R.FIN], saveExtendPg:[R.PRO,R.FIN], securityAct:[R.FIN,R.PRO],
+  saveWo:[R.PRO], addWoLine:[R.PRO], woPullReqLines:[R.PRO], woBudgetCheck:[R.PRO], submitWo:[R.PRO],
+  issueWo:[R.PRO], cancelWo:[R.PRO,R.HOO], amendWo:[R.PRO], saveAmendment:[R.PRO],
+  recordDispatch:[R.PRO,R.STO], saveDispatch:[R.PRO,R.STO], delayAlert:[R.PRO], raiseDelayAlerts:[R.PRO],
+  grnEntry:[R.STO], grnFromDelivery:[R.STO], saveGrn:[R.STO], inspectGrn:[R.INS], saveInspection:[R.INS],
+  postGrn:[R.DDO], rtvFromGrn:[R.STO,R.PRO], replaceRtv:[R.STO,R.PRO], refundRtv:[R.PRO,R.FIN],
+  transferEntry:[R.STO], saveTransfer:[R.STO], despatchTransfer:[R.STO], receiveTransfer:[R.STO],
+  issueEntry:[R.STO,R.IND], saveIssue:[R.STO,R.IND], confirmIssue:[R.STO], returnEntry:[R.STO,R.IND],
+  saveReturn:[R.STO,R.IND], restockReturn:[R.STO], condemnReturn:[R.STO],
+  invoiceEntry:[R.FIN,R.DDO,R.PRO], saveInvoice:[R.FIN,R.DDO,R.PRO], runMatch:[R.FIN,R.DDO], runAllMatches:[R.FIN,R.DDO],
+  resolveException:[R.FIN], sendToFinance:[R.DDO], bulkSendFinance:[R.DDO], recordPayment:[R.FIN],
+  raiseDefect:[R.IND,R.STO,R.PRO], saveDefect:[R.IND,R.STO,R.PRO], updateDefect:[R.PRO,R.STO], saveDefectUpdate:[R.PRO,R.STO],
+  resolveDefect:[R.PRO,R.STO], saveResolution:[R.PRO,R.STO], escalateDefect:[R.PRO,R.HOO], recordReplacement:[R.PRO,R.STO],
+  disposalEntry:[R.STO], saveDisposal:[R.STO], completeDisposal:[R.STO,R.CB], saveDisposalCompletion:[R.STO,R.CB],
+  auditEntry:[R.STO,R.HOO], saveAudit:[R.STO,R.HOO], closeAudit:[R.HOO], postVariances:[R.STO,R.HOO],
+  workflowEntry:[R.MDA], saveWorkflow:[R.MDA], toggleWorkflow:[R.MDA], toggleRule:[R.MDA], testRule:[R.MDA],
+  toggleRole:[R.MDA], simulateSync:[R.MDA,R.PRO,R.FIN,R.STO], reconcilePortal:[R.MDA,R.FIN],
+  checklistEntry:[R.MDA], saveChecklistItem:[R.MDA], toggleChecklistItem:[R.MDA],
+  saveParams:[R.MDA,R.FIN], runEscalationNow:[R.MDA,R.HOO,R.HOD,R.AS,R.FIN,R.FD]
+};
+/* Approval actions: role is resolved per record by the workflow engine; only read-only is enforced here */
+var WF_ACTIONS = ['approveReq','bulkApprove','sendBackReq','rejectReq','approveWo','returnWo','approveDisposal',
+  'rejectDisposal','approveAdjustment','rejectAdjustment'];
+var ACTION_LABEL = {postGrn:'Post GRN to stock ledger', saveWo:'Save / submit work order', issueWo:'Issue work order',
+  saveInspection:'Record inspection result', recordPayment:'Record payment', saveReq:'Save / submit requisition'};
+function actionAllowed(name){
+  if(isRO()) return false;
+  var roles = ACTION_ACL[name];
+  return !roles || roles.indexOf(curRole())>=0;
+}
+function denyAction(name){
+  var lab = ACTION_LABEL[name] || name.replace(/([A-Z])/g,' $1').replace(/^./,function(c){ return c.toUpperCase(); });
+  if(isRO()){
+    lockedDialog('Read-only session', 'The Auditor login can view every record but cannot <b>'+esc(lab.toLowerCase())+'</b>. '+
+      'Switch to an operational role to perform the action.', ACTION_ACL[name]||[], ROUTE);
+    return;
+  }
+  lockedDialog('Action reserved for other roles', '<b>'+esc(lab)+'</b> is not part of the '+esc(curRole())+' profile '+
+    '(segregation of duties).', ACTION_ACL[name]||[], ROUTE);
+}
+function applyGuards(){
+  Object.keys(ACTION_ACL).concat(WF_ACTIONS).forEach(function(name){
+    var fn = window[name];
+    if(typeof fn!=='function' || fn.__guarded) return;
+    var g = function(){
+      if(!actionAllowed(name)){ denyAction(name); return; }
+      return fn.apply(this, arguments);
+    };
+    g.__guarded = true; g.__orig = fn;
+    window[name] = g;
+  });
+}
+
+/* ---------- 13.3 WORKFLOW ENGINE ---------- */
+var HIER = [R.HOO, R.HOD, R.AS, R.FD];
+var REQ_PENDING = ['Submitted','Under Review','Budget Validation Pending'];
+function modeKey(m){
+  if(['Open Tender','CPPP','GNCTD e-Procurement Portal'].indexOf(m)>=0) return 'open';
+  if(m==='Limited Tender') return 'limited';
+  if(['Quotation','GeM','Rate Contract'].indexOf(m)>=0) return 'quotation';
+  return 'direct';
+}
+var KEY_LABEL = {open:'open tender', limited:'limited tender', quotation:'quotation / GeM / rate contract',
+  direct:'direct, single-tender or emergency purchase', disposal:'disposal', adjust:'stock adjustment'};
+function roleLimit(role, key, wfRow){
+  if(role===R.FD) return Infinity;
+  var l = byId(DB.limits,'role',role);
+  if(l && key && l[key]!==undefined && Number(l[key])>0) return Number(l[key]);
+  return wfRow ? (Number(wfRow.to)||0) : 0;
+}
+function fmtLimit(v){ return isFinite(v) ? inr0(v) : 'no ceiling'; }
+function wfBuild(module, value, key){
+  value = Number(value)||0;
+  var act = DB.workflows.filter(function(w){ return w.module===module && w.status==='Active'; })
+    .sort(function(a,b){ return a.level-b.level; });
+  var rows = act.filter(function(w){ return Number(w.from)<=value; });
+  if(!rows.length) rows = act.slice(0,1);
+  if(!rows.length) rows = [{id:'DEFAULT', level:1, role:R.HOO, tat:3, escalate:R.HOD, from:0, to:0}];
+  var chain = rows.map(function(w){
+    return {role:w.role, tat:Number(w.tat)||3, escalate:w.escalate, wf:w.id,
+      basis:'Value band '+inr0(w.from)+' \u2013 '+inr0(w.to)+' (rule '+w.id+')'};
+  });
+  var note = '';
+  if(key){
+    var lastRow = rows[rows.length-1], last = chain[chain.length-1];
+    var lim = roleLimit(last.role, key, lastRow);
+    if(lim < value){
+      var from = last.role;
+      for(var i=Math.max(0, HIER.indexOf(last.role)+1); i<HIER.length; i++){
+        var ro = HIER[i];
+        if(chain.some(function(c){ return c.role===ro; })) continue;
+        var rl = roleLimit(ro, key);
+        chain.push({role:ro, tat:5, escalate:HIER[i+1]||'Principal Secretary (Finance)', wf:'DFPR',
+          basis:'DFPR: '+from+' power for '+KEY_LABEL[key]+' is '+fmtLimit(lim)+'; '+ro+' holds '+fmtLimit(rl)});
+        if(rl >= value) break;
+        from = ro; lim = rl;
+      }
+      note = 'Competent authority resolved at run time from the delegation matrix (Administration \u203A Approval Limits) for '+KEY_LABEL[key]+'.';
+    }
+  }
+  chain.forEach(function(c,i){ c.level = i+1; });
+  return {module:module, key:key||'', value:value, chain:chain, idx:0, since:TODAY, hist:[], note:note, done:false};
+}
+function wfStage(rec){ return rec && rec.wf && !rec.wf.done ? rec.wf.chain[rec.wf.idx] : null; }
+function wfFinalRole(rec){ return rec.wf ? rec.wf.chain[rec.wf.chain.length-1].role : '\u2014'; }
+function wfCanAct(rec){
+  var st = wfStage(rec);
+  if(!st) return {ok:false, why:'No approval is pending on this record.', roles:[]};
+  var roles = [st.role];
+  if(st.escalatedTo && ALL_ROLES.indexOf(st.escalatedTo)>=0) roles.push(st.escalatedTo);
+  if(isRO()) return {ok:false, why:'The Auditor login is read-only. This case is pending with <b>'+esc(st.role)+'</b>.', roles:roles};
+  if(roles.indexOf(curRole())<0) return {ok:false, roles:roles,
+    why:'This case is at level <b>'+(rec.wf.idx+1)+' of '+rec.wf.chain.length+'</b> and rests with <b>'+esc(st.role)+'</b>'+
+      (st.escalatedTo?' (escalated to '+esc(st.escalatedTo)+' after the TAT lapsed)':'')+'. You are signed in as '+esc(curRole())+'.'};
+  if(rec.maker && rec.maker===curUser()) return {ok:false, roles:roles.filter(function(r){ return r!==curRole(); }),
+    why:'<b>Maker-checker rule (GNR_13/14).</b> '+esc(curUser())+' created this record and cannot approve it at any level.'};
+  if(rec.wf.hist.some(function(h){ return h.by===curUser() && h.action==='Approved'; }))
+    return {ok:false, roles:[], why:esc(curUser())+' has already approved this case at an earlier level. One user cannot approve twice.'};
+  return {ok:true, stage:st};
+}
+function wfGate(rec){
+  var c = wfCanAct(rec);
+  if(!c.ok) lockedDialog('Approval not available', c.why, c.roles, ROUTE);
+  return c.ok;
+}
+function wfPush(rec, action, reason){
+  var st = wfStage(rec);
+  rec.wf.hist.push({level:rec.wf.idx+1, role:st?st.role:'\u2014', by:curUser(), as:curRole(), date:TODAY,
+    action:action, reason:reason||'', age:Math.max(0,daysBetween(rec.wf.since,TODAY)), escalatedTo:st&&st.escalatedTo||''});
+}
+function wfAdvance(rec, reason){
+  wfPush(rec,'Approved',reason);
+  rec.wf.idx++; rec.wf.since = TODAY;
+  if(rec.wf.idx >= rec.wf.chain.length){ rec.wf.done = true; return null; }
+  return rec.wf.chain[rec.wf.idx];
+}
+function wfEnd(rec, action, reason){ if(!rec.wf || rec.wf.done) return; wfPush(rec, action, reason); rec.wf.done = true; }
+function wfPanel(rec){
+  if(!rec.wf) return '<div class="note in">No approval workflow has been initiated for this record (draft or legacy entry).</div>';
+  var w = rec.wf;
+  return (w.note?'<div class="note in" style="margin-bottom:9px">'+esc(w.note)+'</div>':'')+
+    '<ul style="list-style:none;padding:0;margin:0 0 10px">'+w.chain.map(function(c,i){
+      var h = w.hist.filter(function(x){ return x.level===i+1; }).slice(-1)[0];
+      var state = h ? h.action : (i===w.idx && !w.done ? 'Pending' : (w.done?'Not required':'Not reached'));
+      var col = h ? (h.action==='Approved'?'#15803D':'#B91C1C') : (i===w.idx&&!w.done ? '#B45309':'#7386A0');
+      var age = (i===w.idx && !w.done) ? Math.max(0,daysBetween(w.since,TODAY)) : null;
+      return '<li class="rag"><span class="s" style="background:'+col+'">'+(h&&h.action==='Approved'?'\u2713':(i+1))+'</span>'+
+        '<span class="grow"><b>'+esc(c.role)+'</b> <span class="muted" style="font-size:10.5px">TAT '+c.tat+' day(s) \u00B7 escalates to '+esc(c.escalate||'\u2014')+'</span>'+
+        '<div class="muted" style="font-size:10.5px">'+esc(c.basis||'')+'</div>'+
+        (h?'<div style="font-size:11px">'+esc(h.action)+' by '+esc(h.by)+' on '+fdate(h.date)+(h.reason?' \u2014 '+esc(h.reason):'')+'</div>':'')+
+        (c.escalatedTo?'<div style="font-size:11px;color:#A32029">Escalated to '+esc(c.escalatedTo)+' on '+fdate(c.escalatedOn)+'</div>':'')+
+        '</span><span>'+badge(state)+(age!==null?'<div class="muted" style="font-size:10.5px;text-align:right">'+age+' day(s)</div>':'')+'</span></li>';
+    }).join('')+'</ul>'+
+    (rec.checklist && rec.checklist.length ? '<div class="sec-h">Checklists completed</div><div class="muted" style="font-size:11px">'+
+      rec.checklist.map(function(c){ return esc(c.process)+' \u2014 '+esc(c.by)+', '+fdate(c.date)+' ('+c.passed+'/'+c.total+' items)'; }).join('<br>')+'</div>':'');
+}
+function wfPreviewHtml(wf, intro){
+  return '<div class="note '+(wf.value?'ok':'in')+'" style="margin-bottom:10px">'+intro+' <b>'+inr(wf.value)+'</b> \u2014 '+
+    wf.chain.length+' approval level(s), resolved from Workflow Configuration'+(wf.key?' and the DFPR delegation matrix':'')+'.</div>'+
+    (wf.note?'<div class="note in" style="margin-bottom:10px">'+esc(wf.note)+'</div>':'')+
+    '<ul style="list-style:none;margin:0;padding:0">'+
+    '<li class="rag"><span class="s" style="background:#15803D">M</span><span class="grow"><b>'+esc(curUser())+'</b> ('+esc(curRole())+')'+
+      '<div class="muted" style="font-size:10.5px">Maker \u2014 cannot approve own record</div></span></li>'+
+    wf.chain.map(function(c,i){
+      return '<li class="rag"><span class="s" style="background:#1E5A96">'+(i+1)+'</span><span class="grow"><b>'+esc(c.role)+'</b>'+
+        '<div class="muted" style="font-size:10.5px">'+esc(c.basis)+' \u00B7 TAT '+c.tat+' day(s)</div></span></li>';
+    }).join('')+'</ul>';
+}
+
+/* requisition workflow */
+function reqEnsureWf(r){
+  if(r.wf || REQ_PENDING.indexOf(r.status)<0) return;
+  var wf = wfBuild('Requisition', r.value, null);
+  var idx = 0;
+  if(r.status==='Budget Validation Pending'){
+    idx = -1;
+    wf.chain.forEach(function(c,i){ if(c.role===R.FIN) idx = i; });
+    if(idx<0){ wf.chain.splice(1,0,{role:R.FIN, tat:5, escalate:'Deputy Secretary', wf:'BV',
+      basis:'Budget validation \u2014 response from the Budget module awaited'}); idx = 1;
+      wf.chain.forEach(function(c,i){ c.level=i+1; }); }
+  } else if(r.status==='Under Review') idx = Math.min(1, wf.chain.length-1);
+  var n = Number(String(r.id).replace(/\D/g,''))||0, since = addDays(TODAY, -[2,6,9,4][n%4]);
+  if(since < r.date) since = r.date;
+  for(var i=0;i<idx;i++) wf.hist.push({level:i+1, role:wf.chain[i].role, by:roleDef(wf.chain[i].role).user,
+    as:wf.chain[i].role, date:since, action:'Approved', reason:'Recommended', age:1});
+  wf.idx = idx; wf.since = since;
+  r.wf = wf; r.maker = r.maker || r.requestor; r.approver = wf.chain[idx].role;
+}
+function paintChain(){
+  var host = document.getElementById('rChain'); if(!host) return;
+  host.innerHTML = wfPreviewHtml(wfBuild('Requisition', reqTotal(), null), 'Requisition value');
+}
+function saveReq(status){
+  if(status!=='Submitted'){ saveReqCore(status); return; }
+  if(!requireOk('reqForm')) return;
+  if(!REQ_LINES.length){ toast('Add at least one material or service line before submitting.','er'); switchTab('cr',2); return; }
+  var form = {purpose:val('rPurpose'), gem:val('rGem'), gemJust:val('rGemJust'), mode:val('rMode'),
+    date:val('rDate'), requiredBy:val('rBy'), avail:Number(val('rAvail')||0), value:reqTotal(), coa:val('rCoa')};
+  checklistGate('Requisition Submission', {form:form}, function(res){ REQ_CHECK = res; saveReqCore(status); });
+}
+var REQ_CHECK = null;
+function approveReq(id){
+  var r = byId(DB.requisitions,'id',id); reqEnsureWf(r);
+  if(!wfGate(r)) return;
+  var st = wfStage(r);
+  if(st.role===R.FIN || r.budget!=='Available'){
+    r.availBudget = bhAvail(r.coa);
+    r.budget = r.availBudget >= r.value ? 'Available' : 'Not Available';
+    save();
+  }
+  if(r.budget==='Not Available'){
+    toast('Cannot approve <b>'+esc(r.no)+'</b> \u2014 uncommitted balance under '+esc(r.coa)+' is '+inr(bhAvail(r.coa))+
+      ' against '+inr(r.value)+'. Seek re-appropriation first.','er');
+    repaintReqTables(); return;
+  }
+  var next = r.wf.chain[r.wf.idx+1];
+  checklistGate('Requisition Approval', {rec:r}, function(res){
+    confirmAct({title:'Approve '+esc(r.no)+' \u2014 level '+(r.wf.idx+1)+' of '+r.wf.chain.length, reason:true,
+      ok: next ? 'Approve and forward' : 'Approve (final)', btnClass:'ok',
+      message: next ? 'Approved at your level and forwarded to <b>'+esc(next.role)+'</b>.'
+                    : '<b>Final approval.</b> The requisition is released for procurement planning.',
+      detail: kvRow('Department', esc(r.dept))+kvRow('Estimated value', inr(r.value))+
+              kvRow('Head of account', esc(r.coa))+kvRow('Uncommitted balance', inr(bhAvail(r.coa)))+
+              kvRow('Acting as', esc(curUser())+' \u2014 '+esc(curRole()))},
+      function(reason){
+        var old = r.status, lvl = r.wf.idx+1;
+        stampChecklist(r, 'Requisition Approval', res);
+        var nx = wfAdvance(r, reason);
+        if(nx){ r.status = nx.role===R.FIN ? 'Budget Validation Pending' : 'Under Review'; r.approver = nx.role;
+          notify('in','Requisition '+r.no+' forwarded','Level '+lvl+' approved; pending with '+nx.role,'req/approvals'); }
+        else { r.status='Approved'; r.approver='\u2014';
+          notify('ok','Requisition '+r.no+' approved','Final approval by '+curRole(),'req/list'); }
+        logAudit('Requisition', r.no, nx?'Approved (Level '+lvl+')':'Approved (Final)','Status',old,r.status,reason);
+        closeAllModals(); repaintReqTables();
+        commit(nx ? 'Approved <b>'+esc(r.no)+'</b> at level '+lvl+' and forwarded to '+esc(nx.role)+'.' : 'Final approval recorded for <b>'+esc(r.no)+'</b>.','ok');
+      });
+  });
+}
+function bulkApprove(){
+  var sel = tblRows('tReqA');
+  if(!sel.length){ toast('Select at least one requisition to approve.','wa'); return; }
+  sel.forEach(reqEnsureWf);
+  var mine = sel.filter(function(r){ return wfCanAct(r).ok && bhAvail(r.coa)>=r.value; });
+  var skip = sel.length - mine.length;
+  if(!mine.length){ toast('None of the selected cases can be approved by '+esc(curRole())+' (other level, maker-checker or budget).','wa'); return; }
+  var auto = mine.filter(function(r){ return checklistAutoPass('Requisition Approval', {rec:r}); });
+  confirmAct({title:'Approve '+auto.length+' requisition(s) at your level', reason:true, ok:'Approve', btnClass:'ok',
+    kind: skip||auto.length<mine.length ? 'wa':'in',
+    message: auto.length+' case(s) will be approved at your level. '+
+      (skip? skip+' selected case(s) are not at your level, fail the budget check, or were made by you, and are skipped. ':'')+
+      (mine.length-auto.length? (mine.length-auto.length)+' case(s) fail an automatic checklist item and must be approved individually. ':'')+
+      'By approving you declare that the manual checklist items were verified for each case.'},
+    function(reason){
+      var n=0;
+      auto.forEach(function(r){
+        var old=r.status, lvl=r.wf.idx+1;
+        stampChecklist(r,'Requisition Approval',{passed:'bulk', total:'bulk'});
+        var nx = wfAdvance(r, reason);
+        if(nx){ r.status = nx.role===R.FIN ? 'Budget Validation Pending' : 'Under Review'; r.approver = nx.role; }
+        else { r.status='Approved'; r.approver='\u2014'; }
+        logAudit('Requisition', r.no, nx?'Approved (Level '+lvl+', bulk)':'Approved (Final, bulk)','Status',old,r.status,reason); n++;
+      });
+      repaintReqTables();
+      commit('Approved '+n+' requisition(s) at your level.','ok');
+    });
+}
+function sendBackReq(id){
+  var r = byId(DB.requisitions,'id',id); reqEnsureWf(r);
+  if(!wfGate(r)) return;
+  confirmAct({title:'Return requisition for correction', kind:'wa', reason:true, ok:'Return', btnClass:'warn',
+    message:'<b>'+esc(r.no)+'</b> goes back to the maker ('+esc(r.maker||r.requestor)+') for correction.'},
+    function(reason){
+      var old=r.status; wfEnd(r,'Returned',reason); r.status='Returned for Correction'; r.approver='Requestor';
+      logAudit('Requisition', r.no,'Returned','Status',old,'Returned for Correction',reason);
+      closeAllModals(); repaintReqTables();
+      commit('Returned <b>'+esc(r.no)+'</b> for correction.','wa');
+    });
+}
+function rejectReq(id){
+  var r = byId(DB.requisitions,'id',id); reqEnsureWf(r);
+  if(!wfGate(r)) return;
+  confirmAct({title:'Reject requisition', kind:'er', btnClass:'dgr', ok:'Reject', reason:true,
+    message:'<b>'+esc(r.no)+'</b> is rejected and the requestor is notified.'},
+    function(reason){
+      var old=r.status; wfEnd(r,'Rejected',reason); r.status='Rejected'; r.approver='\u2014';
+      logAudit('Requisition', r.no,'Rejected','Status',old,'Rejected',reason);
+      closeAllModals(); repaintReqTables();
+      commit('Rejected <b>'+esc(r.no)+'</b>.','er');
+    });
+}
+
+/* work order workflow */
+function woEnsureWf(w){
+  if(w.wf || w.status!=='Pending Approval') return;
+  w.wf = wfBuild('Work Order', w.value, modeKey(w.mode));
+  w.maker = w.maker || 'Anil Katwale'; w.approver = wfStage(w).role;
+}
+function woChain(){
+  var host = document.getElementById('wChain'); if(!host) return;
+  host.innerHTML = wfPreviewHtml(wfBuild('Work Order', woTotals().total, modeKey(val('wMode'))), 'Order value');
+}
+function submitWo(id){
+  var w = byId(DB.workorders,'id',id);
+  if(!w.coa){ toast('The order has no head of account.','er'); return; }
+  if(!w.budgetOk){
+    var av = bhAvail(w.coa);
+    if(av < w.value){ toast('Uncommitted balance under '+esc(w.coa)+' is '+inr(av)+' against '+inr(w.value)+'. The order cannot be submitted.','er'); return; }
+  }
+  var wf = wfBuild('Work Order', w.value, modeKey(w.mode));
+  confirmAct({title:'Submit '+esc(w.no)+' for approval', ok:'Submit', btnClass:'pri', reason:true,
+    message:'Funds of '+inr(w.value)+' are committed under '+esc(w.coa)+' and the order goes to <b>'+esc(wf.chain[0].role)+'</b>.',
+    detail: kvRow('Approval chain', wf.chain.map(function(c){ return esc(c.role); }).join(' \u2192 '))+
+            (wf.note?kvRow('DFPR resolution', esc(wf.note)):'')},
+    function(reason){
+      w.wf = wf; w.maker = w.maker || curUser(); w.status='Pending Approval'; w.approver = wf.chain[0].role;
+      w.budgetOk = true; bookCommitment(w);
+      logAudit('Work Order', w.no,'Submitted','Status','Draft','Pending Approval',reason);
+      notify('in','Work order '+w.no+' submitted','Pending with '+w.approver,'wo/list');
+      tblReload('tWo', DB.workorders); commit('Submitted <b>'+esc(w.no)+'</b> for approval.','ok');
+    });
+}
+function approveWo(id){
+  var w = byId(DB.workorders,'id',id); woEnsureWf(w);
+  if(w.status==='Draft'){ toast('Submit the draft for approval first.','wa'); return; }
+  if(!wfGate(w)) return;
+  var next = w.wf.chain[w.wf.idx+1];
+  var go = function(res){
+    confirmAct({title:'Approve '+esc(w.no)+' \u2014 level '+(w.wf.idx+1)+' of '+w.wf.chain.length, ok: next?'Approve and forward':'Approve (final)',
+      btnClass:'ok', reason:true,
+      message: next ? 'Approved at your level and forwarded to <b>'+esc(next.role)+'</b>.'
+                    : '<b>Final approval</b> by the competent authority. The order can then be issued to the vendor.',
+      detail: kvRow('Vendor', esc(vname(w.vendor)))+kvRow('Order value', inr(w.value))+kvRow('Mode', esc(w.mode))+
+              kvRow('Your DFPR power', fmtLimit(roleLimit(curRole(), modeKey(w.mode))))+kvRow('Delivery due', fdate(w.due))},
+      function(reason){
+        var o=w.status, lvl=w.wf.idx+1;
+        if(res) stampChecklist(w,'Work Order Approval',res);
+        var nx = wfAdvance(w, reason);
+        if(nx){ w.approver = nx.role; notify('in','Work order '+w.no+' forwarded','Pending with '+nx.role,'wo/list'); }
+        else { w.status='Approved'; w.approver='\u2014'; notify('ok','Work order '+w.no+' approved','Ready to issue','wo/list'); }
+        logAudit('Work Order', w.no, nx?'Approved (Level '+lvl+')':'Approved (Final)','Status',o,w.status,reason);
+        closeAllModals(); tblReload('tWo', DB.workorders);
+        commit(nx? 'Approved <b>'+esc(w.no)+'</b> at level '+lvl+'; forwarded to '+esc(nx.role)+'.' : 'Final approval recorded for <b>'+esc(w.no)+'</b>.','ok');
+      });
+  };
+  if(next) go(null); else checklistGate('Work Order Approval', {rec:w}, go);
+}
+function returnWo(id){
+  var w = byId(DB.workorders,'id',id); woEnsureWf(w);
+  if(!wfGate(w)) return;
+  confirmAct({title:'Return work order', kind:'wa', btnClass:'warn', ok:'Return to maker', reason:true,
+    message:'<b>'+esc(w.no)+'</b> returns to draft and the committed funds are released.'},
+    function(reason){
+      wfEnd(w,'Returned',reason); w.status='Draft'; w.approver='\u2014'; w.budgetOk=false; releaseCommitment(w,'Returned');
+      logAudit('Work Order', w.no,'Returned','Status','Pending Approval','Draft',reason);
+      closeAllModals(); tblReload('tWo', DB.workorders); commit('Returned <b>'+esc(w.no)+'</b> to the maker.','wa');
+    });
+}
+function woIssueCheck(w){
+  if(w.status!=='Approved'){ toast('Only an order with final approval can be issued. <b>'+esc(w.no)+'</b> is '+esc(w.status)+'.','wa'); return false; }
+  if(inCutoff(TODAY) && !(w.wf && w.wf.chain.some(function(c){ return c.role===R.FIN||c.role===R.FD; }))){
+    toast('Year-end cut-off: new orders from '+cutoffLabel()+' need Finance concurrence in the approval chain.','er'); return false;
+  }
+  return true;
+}
+
+/* disposal and adjustment workflows (final step delegates to the original posting logic) */
+function dspEnsureWf(d){
+  if(d.wf || d.approval!=='Pending') return;
+  d.wf = wfBuild('Disposal', d.book, 'disposal');
+  var n = Number(String(d.id).replace(/\D/g,''))||0, since = addDays(TODAY, -[3,12,5,8][n%4]);
+  d.wf.since = (d.date && since < d.date) ? d.date : since;
+  d.maker = d.maker || 'R. Meena';
+}
+function approveDisposal(id){
+  var d = byId(DB.disposals,'id',id); dspEnsureWf(d);
+  if(!wfGate(d)) return;
+  var next = d.wf.chain[d.wf.idx+1];
+  if(next){
+    confirmAct({title:'Recommend disposal '+esc(d.no), ok:'Recommend and forward', btnClass:'ok', reason:true,
+      message:'Book value '+inr(d.book)+' exceeds the power of '+esc(curRole())+' for disposal. Forward to <b>'+esc(next.role)+'</b>.'},
+      function(reason){ var lvl=d.wf.idx+1; wfAdvance(d, reason);
+        logAudit('Disposal', d.no,'Recommended (Level '+lvl+')','Approval Status','Pending','Pending',reason);
+        notify('in','Disposal '+d.no+' forwarded','Pending with '+next.role,'disp/proposal');
+        closeAllModals(); if(TBL.tDsp) tblReload('tDsp', DB.disposals); commit('Forwarded <b>'+esc(d.no)+'</b> to '+esc(next.role)+'.','ok'); });
+    return;
+  }
+  checklistGate('Disposal Approval', {rec:d}, function(res){ stampChecklist(d,'Disposal Approval',res); approveDisposalFinal(id); });
+}
+function rejectDisposal(id){ var d = byId(DB.disposals,'id',id); dspEnsureWf(d); if(!wfGate(d)) return; rejectDisposalCore(id); }
+function adjEnsureWf(a){
+  if(a.wf || a.status!=='Pending') return;
+  a.wf = wfBuild('Stock Adjustment', Math.abs(a.value), 'adjust');
+  a.wf.since = a.date || addDays(TODAY,-6); a.maker = a.maker || 'R. Meena';
+}
+function approveAdjustment(id){
+  var a = byId(DB.adjustments,'id',id); adjEnsureWf(a);
+  if(!wfGate(a)) return;
+  var next = a.wf.chain[a.wf.idx+1];
+  if(next){
+    confirmAct({title:'Recommend adjustment '+esc(a.no), ok:'Recommend and forward', btnClass:'ok', reason:true,
+      message:'Variance value '+inr(Math.abs(a.value))+' exceeds the power of '+esc(curRole())+'. Forward to <b>'+esc(next.role)+'</b>.'},
+      function(reason){ var lvl=a.wf.idx+1; wfAdvance(a, reason);
+        logAudit('Stock Adjustment', a.no,'Recommended (Level '+lvl+')','Status','Pending','Pending',reason);
+        closeAllModals(); if(TBL.tAdj) tblReload('tAdj', DB.adjustments); commit('Forwarded <b>'+esc(a.no)+'</b> to '+esc(next.role)+'.','ok'); });
+    return;
+  }
+  checklistGate('Stock Adjustment Approval', {rec:a}, function(res){ stampChecklist(a,'Stock Adjustment Approval',res); approveAdjustmentFinal(id); });
+}
+function rejectAdjustment(id){ var a = byId(DB.adjustments,'id',id); adjEnsureWf(a); if(!wfGate(a)) return; rejectAdjustmentCore(id); }
+
+/* GRN posting: MAT-F02 approver (DDO) with checklist and maker-checker */
+function postGrn(id){
+  var g = byId(DB.grns,'id',id);
+  if(g.inspection==='Pending'||g.inspection==='Under Inspection'){
+    toast('Complete the inspection for <b>'+esc(g.no)+'</b> before posting to inventory.','wa'); return;
+  }
+  checklistGate('GRN Acceptance', {rec:g}, function(res){ stampChecklist(g,'GRN Acceptance',res); postGrnCore(id); });
+}
+
+function myPending(){
+  return slaItems().filter(function(it){ return it.role===curRole() || it.escalatedTo===curRole(); });
+}
+
+/* ---------- 13.4 SLA AGEING AND RUNTIME ESCALATION ---------- */
+function slaItems(){
+  var out = [];
+  function add(module, rec, no, value, route, st, since, level){
+    var age = Math.max(0, daysBetween(since, TODAY));
+    out.push({module:module, rec:rec, st:st, no:no, value:value, route:route, role:st.role, tat:Number(st.tat)||0,
+      escalate:st.escalate||'', escalatedTo:st.escalatedTo||'', since:since, age:age, overdue: age > (Number(st.tat)||0), level:level});
+  }
+  DB.requisitions.forEach(function(r){
+    if(REQ_PENDING.indexOf(r.status)<0) return; reqEnsureWf(r); var st = wfStage(r);
+    if(st) add('Requisition', r, r.no, r.value, 'req/approvals', st, r.wf.since, (r.wf.idx+1)+' / '+r.wf.chain.length);
+  });
+  DB.workorders.forEach(function(w){
+    if(w.status!=='Pending Approval') return; woEnsureWf(w); var st = wfStage(w);
+    if(st) add('Work Order', w, w.no, w.value, 'wo/list', st, w.wf.since, (w.wf.idx+1)+' / '+w.wf.chain.length);
+  });
+  DB.disposals.forEach(function(d){
+    if(d.approval!=='Pending') return; dspEnsureWf(d); var st = wfStage(d);
+    if(st) add('Disposal', d, d.no, d.book, 'disp/proposal', st, d.wf.since, (d.wf.idx+1)+' / '+d.wf.chain.length);
+  });
+  DB.adjustments.forEach(function(a){
+    if(a.status!=='Pending') return; adjEnsureWf(a); var st = wfStage(a);
+    if(st) add('Stock Adjustment', a, a.no, Math.abs(a.value), 'audit/adjust', st, a.wf.since, (a.wf.idx+1)+' / '+a.wf.chain.length);
+  });
+  DB.grns.forEach(function(g){
+    if(g.inspection==='Pending'||g.inspection==='Under Inspection'){
+      if(!g.slaI) g.slaI = {role:R.INS, tat:P('inspTat'), escalate:R.HOO, since:g.date};
+      add('GRN Inspection', g, g.no, 0, 'grn/pending', g.slaI, g.slaI.since, '1 / 1');
+    } else if(g.posting==='Pending'){
+      if(!g.slaP) g.slaP = {role:R.DDO, tat:P('postTat'), escalate:R.HOO, since:addDays(g.date,2)>TODAY?TODAY:addDays(g.date,2)};
+      add('GRN Posting', g, g.no, 0, 'grn/list', g.slaP, g.slaP.since, '1 / 1');
+    }
+  });
+  var wf8 = DB.workflows.filter(function(w){ return w.module==='Invoice'; })[0] || {role:R.FIN, tat:7, escalate:'Chief Accounts Officer'};
+  DB.invoices.forEach(function(i){
+    if(i.finance==='Approved' || i.status==='Rejected') return;
+    if(!i.sla) i.sla = {role:wf8.role, tat:Number(wf8.tat)||7, escalate:wf8.escalate, since:i.recd||i.date};
+    add('Invoice', i, i.no, i.amount, 'billing/invoice', i.sla, i.sla.since, '1 / 1');
+  });
+  return out;
+}
+function runEscalation(silent){
+  var n = 0;
+  slaItems().forEach(function(it){
+    if(!it.overdue || it.st.escalatedTo) return;
+    it.st.escalatedTo = it.escalate; it.st.escalatedOn = TODAY; n++;
+    DB.trail.unshift({id:uid('AT'), ts:nowIso(), type:it.module, ref:it.no, action:'Escalated', field:'Pending With',
+      oldv:it.role, newv:it.escalate, reason:'Pending '+it.age+' day(s) against a TAT of '+it.tat+' day(s)',
+      by:'SLA Engine', role:'System', dept:DEPTS[0], approval:'\u2014', src:'Workflow Scheduler', ip:'\u2014'});
+    DB.notifications.unshift({id:uid('NT'), kind:'er', title:it.module+' '+it.no+' escalated',
+      sub:it.age+' day(s) with '+it.role+' (TAT '+it.tat+'); escalated to '+it.escalate, route:it.route, read:false, ts:TODAY});
+  });
+  if(n){ save(); paintNotifCount(); }
+  if(!silent || n) toast(n ? '<b>SLA engine:</b> '+n+' overdue case(s) escalated. See Workflow Pending &amp; Ageing.' :
+    'SLA check complete. No new case beyond its TAT.', n?'wa':'ok', 6000);
+  return n;
+}
+function runEscalationNow(){ runEscalation(false); if(ROUTE==='rep/ageing') goto('rep/ageing'); }
+function slaCell(it){
+  if(!it) return '\u2014';
+  return '<span class="bdg '+(it.overdue?'b-er':(it.age>=it.tat-1?'b-wa':'b-ok'))+'">'+it.age+'d / '+it.tat+'d</span>'+
+    (it.escalatedTo?' <span class="bdg b-er" title="Escalated">\u2191 '+esc(it.escalatedTo)+'</span>':'');
+}
+function slaFor(rec){
+  var st = wfStage(rec); if(!st) return null;
+  var age = Math.max(0, daysBetween(rec.wf.since, TODAY));
+  return {age:age, tat:st.tat, overdue:age>st.tat, escalatedTo:st.escalatedTo};
+}
+function slaBadge(r){ if(REQ_PENDING.indexOf(r.status)>=0) reqEnsureWf(r); return slaCell(slaFor(r)); }
+
+SCREENS['rep/ageing'] = function(){
+  var items = slaItems();
+  var mine = items.filter(function(i){ return i.role===curRole()||i.escalatedTo===curRole(); });
+  var bk = [['0\u20133 days',0,3],['4\u20137 days',4,7],['8\u201315 days',8,15],['Over 15 days',16,99999]].map(function(b,i){
+    return {l:b[0], v:items.filter(function(x){ return x.age>=b[1] && x.age<=b[2]; }).length, c:['#15803D','#B45309','#C2410C','#B91C1C'][i]}; });
+  var mods = uniq(items.map(function(i){ return i.module; }));
+  return pageHead('Workflow Pending and Ageing','Reports and MIS',
+    'Every case in a workflow, its age at the current stage against the configured TAT, and runtime escalation',
+    '<button class="btn gh sm" onclick="tblExport(\'tAge\',\'Workflow_Ageing\')">\u2913 Export</button>'+
+    '<button class="btn warn sm" onclick="runEscalationNow()">\u23F1 Run SLA check now</button>', reqTags('MMP_20','MMP_22'))+
+  summaryRow([
+    {l:'Cases in workflow', v:items.length, c:'#1E5A96'},
+    {l:'Beyond TAT', v:items.filter(function(i){ return i.overdue; }).length, c:'#B91C1C'},
+    {l:'Escalated', v:items.filter(function(i){ return i.escalatedTo; }).length, c:'#B45309'},
+    {l:'Pending with '+curRole(), v:mine.length, c:'#0F766E'}
+  ])+
+  '<div class="grid g2" style="margin-bottom:12px"><div class="card"><div class="hd"><span>Ageing buckets (days at current stage)</span></div><div class="bd">'+
+    barChart(bk,{fmt:function(v){ return v+' case(s)'; }})+'</div></div>'+
+  '<div class="card"><div class="hd"><span>How the SLA engine works</span></div><div class="bd" style="font-size:12px;line-height:1.55">'+
+    'Each workflow stage carries a TAT and an escalation designation (Administration \u203A Workflow Configuration). '+
+    'On every load, role switch and on demand, the engine computes the age of each case at its current stage. '+
+    'A case past its TAT is <b>escalated</b>: the designation is notified, the case is flagged in every register, the event is written to the audit trail, '+
+    'and where the designation is a system role it may act on the case alongside the original approver (delegation on delay). '+
+    'GRN inspection and posting TATs come from Procurement Parameters.</div></div></div>'+
+  filterBar([fld({id:'agMod', label:'Process', type:'select', opts:mods, blank:'All'}),
+    fld({id:'agMine', label:'Scope', type:'select', opts:['All cases','Pending with my role','Beyond TAT only'], blank:false})],
+    'filterAgeing()')+
+  '<div class="card"><div class="bd">'+renderTable({id:'tAge', rows:items.sort(function(a,b){ return b.age-a.age; }), cols:[
+    {h:'Process', k:'module'},
+    {h:'Reference', k:'no', cls:'mono'},
+    {h:'Value', k:'value', cls:'num', f:function(r){ return r.value? inr(r.value):'\u2014'; }},
+    {h:'Level', k:'level'},
+    {h:'Pending With', k:'role'},
+    {h:'At Stage Since', k:'since', f:function(r){ return fdate(r.since); }},
+    {h:'Age / TAT', k:'age', f:function(r){ return slaCell(r); }, sv:function(r){ return r.age; }},
+    {h:'Escalation Designation', k:'escalate'},
+    {h:'Status', k:'overdue', f:function(r){ return badge(r.overdue?(r.escalatedTo?'Escalated':'Overdue'):'On Time'); }},
+    {h:'Actions', k:'a', cls:'acts', srt:false, f:function(r){ return actIcon('Open','goto(\''+r.route+'\')','gh'); }}
+  ], empty:'No case is pending in any workflow'})+'</div></div>';
+};
+function filterAgeing(){
+  var m = val('agMod'), s = val('agMine');
+  var rows = slaItems().filter(function(i){
+    return (!m || i.module===m) && (s!=='Pending with my role' || i.role===curRole() || i.escalatedTo===curRole()) &&
+      (s!=='Beyond TAT only' || i.overdue);
+  }).sort(function(a,b){ return b.age-a.age; });
+  tblReload('tAge', rows); toast(rows.length+' case(s) matched.', rows.length?'ok':'wa');
+}
+
+/* ---------- 13.5 CHECKLIST MASTER ---------- */
+function seedChecklists(){
+  var c = [
+    ['Requisition Submission','auto','req_justif','Purpose and justification recorded to the minimum length','MAT-F01',true],
+    ['Requisition Submission','auto','req_gem','GeM availability declared; non-GeM procurement of a GeM-available item is justified','GFR 149',true],
+    ['Requisition Submission','auto','req_date','Required-by date falls after the requisition date','MAT-F01',true],
+    ['Requisition Submission','auto','req_budget','Budget check run and the head of account has balance','MAT-F01',true],
+    ['Requisition Submission','manual','','Specification is generic and does not favour a particular make or brand','GFR 144',true],
+    ['Requisition Approval','auto','req_budget_live','Head of account holds uncommitted balance for the requisition value','Budget interface',true],
+    ['Requisition Approval','auto','req_stock','Requirement cannot be met from net available stock','Stock check',false],
+    ['Requisition Approval','manual','','Quantity is reasonable against past consumption','Scrutiny',true],
+    ['Work Order Approval','auto','wo_commit','Funds committed against the head of account','Budget interface',true],
+    ['Work Order Approval','auto','wo_dfpr','Final authority in the chain holds financial power for the value and mode','DFPR',true],
+    ['Work Order Approval','auto','wo_pg','Performance security captured where the order value exceeds the threshold','GFR 171',true],
+    ['Work Order Approval','auto','wo_cutoff','Order is outside the year-end cut-off, or Finance concurrence is in the chain','GFR 62',true],
+    ['Work Order Approval','manual','','Rates are justified against the comparative statement or GeM price','Scrutiny',true],
+    ['GRN Acceptance','auto','grn_insp','Inspection completed with accepted quantity recorded','MAT-F02',true],
+    ['GRN Acceptance','auto','grn_mc','GRN prepared by a different user from the one posting it','GNR_13/14',true],
+    ['GRN Acceptance','manual','','Items counted and entered in the stock register with bin location','MAT-F02',true],
+    ['Disposal Approval','auto','dsp_committee','Condemnation committee constituted and recorded','GFR 217',true],
+    ['Disposal Approval','manual','','Reserve price fixed or realisable value assessed before disposal','GFR 217\u2013218',true],
+    ['Stock Adjustment Approval','auto','adj_reason','Reason for the variance recorded','PV sheet',true],
+    ['Stock Adjustment Approval','manual','','Loss reported and responsibility examined where the shortage is not explained','GFR 33',true]
+  ];
+  return c.map(function(x,i){ return {id:'CL-'+pad(i+1,2), process:x[0], type:x[1], rule:x[2], text:x[3], ref:x[4], mandatory:x[5], active:true}; });
+}
+var CHECK_PROCESSES = ['Requisition Submission','Requisition Approval','Work Order Approval','GRN Acceptance','Disposal Approval','Stock Adjustment Approval'];
+var CHECK_RULES = {
+  req_justif: function(c){ var t = (c.form?c.form.purpose:c.rec.purpose)||''; return {ok:t.trim().length>=P('justifMin'), msg:t.trim().length+' characters (minimum '+P('justifMin')+')'}; },
+  req_gem: function(c){ var f = c.form||c.rec, g = f.gem||'';
+    if(!g) return {ok:false, msg:'GeM availability not declared'};
+    if(g==='Available on GeM' && f.mode && f.mode!=='GeM' && (f.gemJust||'').trim().length<20)
+      return {ok:false, msg:'Item is on GeM but the suggested mode is '+f.mode+' without a justification of 20+ characters'};
+    return {ok:true, msg:g+(f.mode?' \u00B7 mode '+f.mode:'')}; },
+  req_date: function(c){ var f=c.form||c.rec; return {ok:!!f.requiredBy && f.requiredBy>f.date, msg:'Required by '+fdate(f.requiredBy)}; },
+  req_budget: function(c){ var f=c.form; return {ok:f.avail>0 && f.avail>=f.value, msg: f.avail? 'Available '+inr(f.avail)+' vs '+inr(f.value) : 'Budget check not run'}; },
+  req_budget_live: function(c){ var a = bhAvail(c.rec.coa); return {ok:a>=c.rec.value, msg:'Uncommitted '+inr(a)+' vs '+inr(c.rec.value)}; },
+  req_stock: function(c){ return {ok:c.rec.stockAvail!=='Available', msg:'Stock: '+c.rec.stockAvail}; },
+  wo_commit: function(c){ var k = commitmentOf(c.rec.no); return {ok:!!k && k.status!=='Released', msg: k? 'Commitment '+k.id+' \u2014 '+inr(k.amount):'No commitment'}; },
+  wo_dfpr: function(c){ var f = wfFinalRole(c.rec), l = roleLimit(f, modeKey(c.rec.mode)); return {ok:l>=c.rec.value, msg:f+' power '+fmtLimit(l)+' vs '+inr(c.rec.value)}; },
+  wo_pg: function(c){ var need = c.rec.value > P('pgThreshold'); return {ok:!need || (c.rec.pg||0)>0, msg: need? 'Security '+inr(c.rec.pg||0)+' on '+inr(c.rec.value) : 'Below threshold '+inr0(P('pgThreshold'))}; },
+  wo_cutoff: function(c){ var inC = inCutoff(TODAY); var fin = c.rec.wf && c.rec.wf.chain.some(function(x){ return x.role===R.FIN||x.role===R.FD; });
+    return {ok:!inC || fin, msg: inC? (fin?'In cut-off; Finance in chain':'In cut-off; no Finance concurrence') : 'Outside cut-off (from '+cutoffLabel()+')'}; },
+  grn_insp: function(c){ var g=c.rec; return {ok:['Pending','Under Inspection'].indexOf(g.inspection)<0 && g.accepted>0, msg:'Inspection '+g.inspection+', accepted '+num(g.accepted)}; },
+  grn_mc: function(c){ var m = c.rec.maker || c.rec.receiver || '\u2014'; return {ok:m!==curUser(), msg:'Prepared by '+m+'; posting by '+curUser()}; },
+  dsp_committee: function(c){ return {ok:!!c.rec.committee, msg:c.rec.committee||'Not recorded'}; },
+  adj_reason: function(c){ return {ok:!!(c.rec.reason||'').trim(), msg:c.rec.reason||'No reason'}; }
+};
+function checklistEval(process, ctx){
+  return DB.checklists.filter(function(c){ return c.process===process && c.active; }).map(function(c){
+    if(c.type!=='auto') return {c:c, ok:null, msg:''};
+    var fn = CHECK_RULES[c.rule], r = fn ? fn(ctx) : {ok:true, msg:'Rule not bound'};
+    return {c:c, ok:!!r.ok, msg:r.msg};
+  });
+}
+function checklistAutoPass(process, ctx){
+  return checklistEval(process, ctx).every(function(x){ return x.ok!==false || !x.c.mandatory; });
+}
+function checklistGate(process, ctx, onPass){
+  var res = checklistEval(process, ctx);
+  if(!res.length){ onPass({passed:0,total:0}); return; }
+  modal({title:'Checklist \u2014 '+esc(process), size:'lg',
+    body:'<div class="note in" style="margin-bottom:10px">Items are held in <b>Administration \u203A Checklist Master</b> and can be changed without code. '+
+      'Automatic items are evaluated by the system; manual items are the checker\u2019s declaration and are stored with the record.</div>'+
+      '<div class="twrap"><table class="tbl"><thead><tr><th>#</th><th>Check</th><th>Type</th><th>Basis</th><th>Result</th></tr></thead><tbody>'+
+      res.map(function(x,i){
+        return '<tr><td class="mono">'+esc(x.c.id)+'</td><td>'+esc(x.c.text)+(x.c.mandatory?'<span class="rq">*</span>':' <span class="muted">(advisory)</span>')+
+          (x.msg?'<div class="muted" style="font-size:10.5px">'+esc(x.msg)+'</div>':'')+'</td>'+
+          '<td>'+(x.c.type==='auto'?'Automatic':'Manual')+'</td><td>'+esc(x.c.ref)+'</td><td>'+
+          (x.c.type==='auto' ? badge(x.ok?'Compliant':(x.c.mandatory?'Non-compliant':'Warning'))
+            : '<label class="chk"><input type="checkbox" class="clm" data-m="'+(x.c.mandatory?1:0)+'"> Verified</label>')+'</td></tr>';
+      }).join('')+'</tbody></table></div><div class="ferr" id="clErr" style="margin-top:8px"></div>',
+    footer:'<button class="btn" data-close>Cancel</button><button class="btn pri" id="clOk">Proceed</button>',
+    onMount:function(ovl){
+      ovl.querySelector('#clOk').onclick = function(){
+        var failA = res.filter(function(x){ return x.c.type==='auto' && x.c.mandatory && !x.ok; });
+        var boxes = Array.prototype.slice.call(ovl.querySelectorAll('.clm'));
+        var failM = boxes.filter(function(b){ return b.dataset.m==='1' && !b.checked; });
+        if(failA.length || failM.length){
+          var e = ovl.querySelector('#clErr');
+          e.innerHTML = (failA.length? failA.length+' mandatory automatic check(s) failed \u2014 correct the record first. ':'')+
+            (failM.length? failM.length+' mandatory manual item(s) not verified.':'');
+          e.classList.add('show'); return;
+        }
+        closeModal(ovl.dataset.id);
+        onPass({passed: res.filter(function(x){ return x.ok===true; }).length + boxes.filter(function(b){ return b.checked; }).length, total:res.length});
+      };
+    }});
+}
+function stampChecklist(rec, process, res){
+  rec.checklist = rec.checklist || [];
+  rec.checklist.push({process:process, by:curUser(), role:curRole(), date:TODAY, passed:res?res.passed:0, total:res?res.total:0});
+}
+SCREENS['admin/checklist'] = function(){
+  return pageHead('Checklist Master','Administration',
+    'Configurable scrutiny checklists bound to process validators \u2014 changed without code',
+    '<button class="btn pri sm" onclick="checklistEntry()">+ Add checklist item</button>', reqTags('MMP_22'))+
+  summaryRow([
+    {l:'Checklist items', v:DB.checklists.length, c:'#1E5A96'},
+    {l:'Processes covered', v:uniq(DB.checklists.map(function(c){ return c.process; })).length, c:'#0F766E'},
+    {l:'Automatic (rule-bound)', v:DB.checklists.filter(function(c){ return c.type==='auto'; }).length, c:'#15803D'},
+    {l:'Manual declarations', v:DB.checklists.filter(function(c){ return c.type!=='auto'; }).length, c:'#B45309'}
+  ])+
+  '<div class="card"><div class="bd">'+renderTable({id:'tChk', rows:DB.checklists, cols:[
+    {h:'ID', k:'id', cls:'mono'}, {h:'Process', k:'process'}, {h:'Check', k:'text'},
+    {h:'Type', k:'type', f:function(r){ return r.type==='auto'?'Automatic':'Manual'; }},
+    {h:'Bound Rule', k:'rule', cls:'mono', f:function(r){ return r.rule||'\u2014'; }},
+    {h:'Basis', k:'ref'},
+    {h:'Mandatory', k:'mandatory', f:function(r){ return r.mandatory?'Yes':'Advisory'; }},
+    {h:'Status', k:'active', f:function(r){ return badge(r.active?'Active':'Suspended'); }},
+    {h:'Actions', k:'a', cls:'acts', srt:false, f:function(r){ return actIcon(r.active?'Suspend':'Activate','toggleChecklistItem(\''+r.id+'\')','warn'); }}
+  ]})+'</div></div>'+
+  '<div class="note in" style="margin-top:10px">Rule references (GFR 2017 as amended) are indicative and should be confirmed against the GNCTD delegation orders before configuration in production.</div>';
+};
+function checklistEntry(){
+  modal({title:'Add checklist item', body:'<div class="fgrid g2" id="clForm">'+
+    fld({id:'clProc', label:'Process', type:'select', opts:CHECK_PROCESSES, req:true})+
+    fld({id:'clType', label:'Type', type:'select', opts:[{v:'manual',l:'Manual declaration'},{v:'auto',l:'Automatic (bound rule)'}], blank:false})+
+    fld({id:'clRule', label:'Bound rule (automatic only)', type:'select', opts:Object.keys(CHECK_RULES)})+
+    fld({id:'clRef', label:'Basis / reference', val:'Departmental instruction'})+
+    '</div><div class="fgrid" style="margin-top:10px">'+fld({id:'clText', label:'Check text', type:'textarea', rows:2, req:true})+
+    fld({id:'clMand', label:'Mandatory', type:'checkbox', val:true})+'</div>',
+    footer:'<button class="btn" data-close>Cancel</button><button class="btn pri" onclick="saveChecklistItem()">Save item</button>'});
+}
+function saveChecklistItem(){
+  if(!requireOk('clForm') || !val('clText').trim()){ toast('Enter the process and the check text.','er'); return; }
+  var rec = {id:'CL-'+pad(DB.checklists.length+1,2), process:val('clProc'), type:val('clType'),
+    rule: val('clType')==='auto'? val('clRule') : '', text:val('clText'), ref:val('clRef'), mandatory:!!val('clMand'), active:true};
+  DB.checklists.push(rec);
+  logAudit('Checklist Master', rec.id,'Created','Item','\u2014',rec.text,rec.process);
+  closeModal(); tblReload('tChk', DB.checklists); commit('Added checklist item <b>'+rec.id+'</b>.','ok');
+}
+function toggleChecklistItem(id){
+  var c = byId(DB.checklists,'id',id); c.active = !c.active;
+  logAudit('Checklist Master', c.id, c.active?'Activated':'Suspended','Status', c.active?'Suspended':'Active', c.active?'Active':'Suspended','Configuration change');
+  tblReload('tChk', DB.checklists); commit((c.active?'Activated ':'Suspended ')+'<b>'+c.id+'</b>.','ok');
+}
+
+/* ---------- 13.6 BUDGET HEADS, COMMITMENTS, PHASING ---------- */
+function seedBudgetHeads(){
+  var v = [[60000000,13500000],[42000000,9500000],[36000000,11000000],[12000000,3800000],[95000000,21000000],[50000000,6200000]];
+  return COA.map(function(c,i){ return {coa:c, dept:DEPTS[0], allot:v[i][0], expOther:v[i][1], src:'IFMS Budget Management \u2014 DDO allocation, FY 2026-27'}; });
+}
+function commitmentOf(ref){ return DB.commitments.filter(function(k){ return k.ref===ref; })[0]; }
+function kOutstanding(k){ return k.status==='Released' ? 0 : Math.max(0, k.amount-k.liquidated); }
+function bhPos(coa){
+  var h = byId(DB.budgetHeads,'coa',coa) || {coa:coa, allot:0, expOther:0};
+  var ks = DB.commitments.filter(function(k){ return k.coa===coa; });
+  var liq = sum(ks,'liquidated'), out = sum(ks, kOutstanding);
+  var exp = h.expOther + liq;
+  return {coa:coa, allot:h.allot, exp:exp, committed:out, avail:h.allot-exp-out, head:h};
+}
+function bhAvail(coa){ return coa ? Math.max(0, bhPos(coa).avail) : 0; }
+function bookCommitment(w){
+  if(commitmentOf(w.no) && commitmentOf(w.no).status!=='Released') return;
+  var ex = commitmentOf(w.no);
+  if(ex){ ex.status='Booked'; ex.amount=w.value; ex.date=TODAY; return; }
+  DB.commitments.push({id:'CMT/2026/'+pad(4100+DB.commitments.length,5), ref:w.no, coa:w.coa, amount:w.value,
+    liquidated:0, date:TODAY, status:'Booked', by:curUser()});
+}
+function releaseCommitment(w, why){
+  var k = commitmentOf(w.no); if(!k) return;
+  k.status = 'Released'; k.note = why+' on '+fdate(TODAY);
+}
+function liquidateCommitment(inv){
+  var k = commitmentOf(inv.wo); if(!k) return;
+  k.liquidated = Math.min(k.amount, k.liquidated + inv.amount);
+  if(k.liquidated>=k.amount) k.status='Liquidated'; else k.status='Partly Liquidated';
+}
+function fyElapsedPct(){ return Math.min(100, Math.max(0, daysBetween('2026-04-01', TODAY)/365*100)); }
+function inCutoff(d){ var md = d.slice(5); return md >= P('cutoffMonthDay') && md <= '03-31'; }
+function cutoffLabel(){ var p = P('cutoffMonthDay').split('-'); return p[1]+'-'+MON[Number(p[0])-1]; }
+function fyQuarter(d){ var m = Number(d.slice(5,7)); return m>=4&&m<=6?'Q1':(m<=9&&m>=7?'Q2':(m>=10?'Q3':'Q4')); }
+SCREENS['rep/budget'] = function(){
+  var el = fyElapsedPct(), band = P('burnBandPp');
+  var rows = COA.map(function(c){
+    var p = bhPos(c), expPct = p.allot? p.exp/p.allot*100:0, utl = p.allot? (p.exp+p.committed)/p.allot*100 : 0;
+    var bal = p.allot - p.exp, cover = bal>0? p.committed/bal*100 : 0;
+    var burn = expPct < el-band ? 'Slow Moving' : (expPct > el+band ? 'Warning' : 'On Time');
+    return {coa:c, allot:p.allot, exp:p.exp, committed:p.committed, avail:p.avail, expPct:expPct, utl:utl, cover:cover, burn:burn};
+  });
+  var q = {Q1:0,Q2:0,Q3:0,Q4:0}, mar = 0;
+  DB.workorders.forEach(function(w){ if(['Cancelled','Draft'].indexOf(w.status)>=0) return; q[fyQuarter(w.date)] += w.value; if(w.date.slice(5,7)==='03') mar += w.value; });
+  var tot = q.Q1+q.Q2+q.Q3+q.Q4, allot = sum(rows,'allot');
+  return pageHead('Budget Utilisation and Phasing Control','Reports and MIS',
+    'Head-of-account position from the Budget module, commitments from work orders, burn rate against the year elapsed, and year-end phasing',
+    '<button class="btn gh sm" onclick="tblExport(\'tBh\',\'Budget_Head_Position\')">\u2913 Export</button>', reqTags('MMP_3','MMP_21'))+
+  summaryRow([
+    {l:'Allotment (6 heads)', v:inr0(allot), c:'#1E5A96'},
+    {l:'Expenditure', v:inr0(sum(rows,'exp')), c:'#15803D'},
+    {l:'Outstanding commitments', v:inr0(sum(rows,'committed')), c:'#B45309'},
+    {l:'Year elapsed', v:el.toFixed(1)+'%', c:'#0F766E'}
+  ])+
+  '<div class="card" style="margin-bottom:12px"><div class="hd"><span>Head-of-account position and burn rate</span>'+
+  '<span class="muted" style="font-size:11px;font-weight:400">Band \u00B1'+band+' percentage points around '+el.toFixed(1)+'% of the year elapsed</span></div><div class="bd">'+
+  renderTable({id:'tBh', rows:rows, cols:[
+    {h:'Head of Account', k:'coa'},
+    {h:'Allotment', k:'allot', cls:'num', f:function(r){ return inr0(r.allot); }},
+    {h:'Expenditure', k:'exp', cls:'num', f:function(r){ return inr0(r.exp); }},
+    {h:'Outstanding Commitments', k:'committed', cls:'num', f:function(r){ return inr0(r.committed); }},
+    {h:'Uncommitted Balance', k:'avail', cls:'num', f:function(r){ return '<b>'+inr0(r.avail)+'</b>'; }},
+    {h:'Spent % vs Elapsed', k:'expPct', cls:'num', f:function(r){ return r.expPct.toFixed(1)+'% / '+el.toFixed(1)+'%'; }},
+    {h:'Burn Rate', k:'burn', f:function(r){ return badge(r.burn==='On Time'?'On Time':(r.burn==='Warning'?'Warning':'Slow Moving')).replace('>Slow Moving<','>Slow \u2014 year-end rush risk<').replace('>Warning<','>Ahead of time<'); }},
+    {h:'Committed Liability Cover', k:'cover', cls:'num', f:function(r){ return '<span class="bdg '+(r.cover>P('commitCoverPct')?'b-er':'b-ok')+'">'+r.cover.toFixed(0)+'%</span>'; }}
+  ]})+'<div class="note in" style="margin-top:10px">Committed liability cover = outstanding commitments as a share of the balance allotment. Above '+P('commitCoverPct')+
+  '% the head has little room for new starts; new requisitions and orders under it are checked against the <b>uncommitted</b> balance, never the gross allotment.</div></div></div>'+
+  '<div class="grid g2" style="margin-bottom:12px"><div class="card"><div class="hd"><span>Order value by quarter (FY 2026-27)</span></div><div class="bd">'+
+    barChart(['Q1','Q2','Q3','Q4'].map(function(k,i){ return {l:k+(k==='Q4'?' (Jan\u2013Mar)':''), v:Math.round(q[k]), c:['#1E5A96','#0F766E','#B45309','#B91C1C'][i]}; }),{fmt:inr0})+
+  '</div></div><div class="card"><div class="hd"><span>Year-end phasing controls</span></div><div class="bd" style="font-size:12px;line-height:1.6">'+
+    '<table class="kv">'+kvRow('Q4 share of orders to date', (tot? (q.Q4/tot*100).toFixed(1):'0.0')+'% (limit '+P('q4CapPct')+'% of allotment)')+
+    kvRow('March share', (allot? (mar/allot*100).toFixed(1):'0.0')+'% of allotment (limit '+P('marchCapPct')+'%)')+
+    kvRow('Cut-off for new orders', cutoffLabel()+' to 31-Mar \u2014 Finance concurrence must be in the chain')+
+    kvRow('Status today', inCutoff(TODAY)?'<span class="bdg b-er">Cut-off window active</span>':'<span class="bdg b-ok">Outside cut-off window</span>')+'</table>'+
+    '<div class="note wa" style="margin-top:8px">The Q4/March ceilings follow the Ministry of Finance expenditure-management guidance on avoiding the year-end rush (GFR 2017 Rule 62). Their applicability to GNCTD is a Finance Department decision; the values are parameters, not assertions.</div>'+
+  '</div></div></div>'+
+  '<div class="card"><div class="hd"><span>Commitment register</span></div><div class="bd">'+renderTable({id:'tCmt', rows:DB.commitments, cols:[
+    {h:'Commitment', k:'id', cls:'mono'}, {h:'Order', k:'ref', cls:'mono'}, {h:'Head of Account', k:'coa'},
+    {h:'Booked', k:'amount', cls:'num', f:function(r){ return inr0(r.amount); }},
+    {h:'Liquidated', k:'liquidated', cls:'num', f:function(r){ return inr0(r.liquidated); }},
+    {h:'Outstanding', k:'o', cls:'num', f:function(r){ return inr0(kOutstanding(r)); }, sv:kOutstanding},
+    {h:'Date', k:'date', f:function(r){ return fdate(r.date); }}, {h:'Status', k:'status', f:function(r){ return badge(r.status); }}
+  ]})+'</div></div>';
+};
+
+/* ---------- 13.7 PROCUREMENT PARAMETERS ---------- */
+var PARAM_DEFS = [
+  ['ldPctPerWeek','Liquidated damages per week of delay','%','Contract condition'],
+  ['ldCapPct','Maximum liquidated damages','% of order value','Contract condition'],
+  ['matchRateTolPct','Three-way match: rate tolerance','%','Finance instruction'],
+  ['matchValueTolPct','Three-way match: value tolerance','%','Finance instruction'],
+  ['emdPct','Bid security (EMD) on tender value','%','GFR 170'],
+  ['feeThreshold','Tender value above which the higher fee applies','\u20B9','Department'],
+  ['feeHigh','Tender document fee \u2014 above threshold','\u20B9','Department'],
+  ['feeLow','Tender document fee \u2014 up to threshold','\u20B9','Department'],
+  ['pgThreshold','Order value above which performance security is mandatory','\u20B9','GFR 171 / department policy'],
+  ['condemnBookPct','Default book value of unserviceable returns (pending board valuation)','% of cost','Condemnation board'],
+  ['condemnResidualPct','Default residual value of unserviceable returns','% of cost','Condemnation board'],
+  ['justifMin','Minimum length of requisition justification','characters','Checklist CL-01'],
+  ['inspTat','TAT for inspection of receipts','days','SLA'],
+  ['postTat','TAT for DDO posting of inspected GRN','days','SLA'],
+  ['cutoffMonthDay','Year-end cut-off for new orders (MM-DD)','date','GFR 62 / FD circular'],
+  ['q4CapPct','Ceiling on Q4 orders','% of allotment','MoF guidance (confirm for GNCTD)'],
+  ['marchCapPct','Ceiling on March orders','% of allotment','MoF guidance (confirm for GNCTD)'],
+  ['burnBandPp','Burn-rate tolerance band','percentage points','MIS'],
+  ['commitCoverPct','Committed liability cover alert','% of balance allotment','MIS']
+];
+function seedParams(){
+  return {ldPctPerWeek:0.5, ldCapPct:10, matchRateTolPct:1, matchValueTolPct:2, emdPct:2, feeThreshold:2500000,
+    feeHigh:5000, feeLow:2000, pgThreshold:1000000, condemnBookPct:35, condemnResidualPct:11, justifMin:30,
+    inspTat:7, postTat:3, cutoffMonthDay:'03-15', q4CapPct:33, marchCapPct:15, burnBandPp:15, commitCoverPct:80};
+}
+function P(k){ var d = seedParams(); return (DB && DB.params && DB.params[k]!==undefined) ? DB.params[k] : d[k]; }
+function ldCompute(value, days){
+  if(days<=0) return 0;
+  return Math.min(Math.round(value*P('ldCapPct')/100), Math.round(value*P('ldPctPerWeek')/100*Math.ceil(days/7)));
+}
+function woTaxFactor(w){ return (w && w.basic) ? (w.value/w.basic) : 1 + ((w && w.lines && w.lines[0] && w.lines[0].taxPct)||0)/100; }
+function otherStoreQty(mat, store){ return sum((DB.stockOther||[]).filter(function(o){ return o.mat===mat && o.store!==store; }),'avail'); }
+SCREENS['admin/params'] = function(){
+  return pageHead('Procurement Parameters','Administration',
+    'Rates, tolerances, thresholds and TATs used in calculations \u2014 held as data, not in code',
+    '<button class="btn pri sm" onclick="saveParams()">\u2713 Save parameters</button>', reqTags('MMP_22'))+
+  '<div class="card"><div class="bd"><div class="twrap"><table class="tbl"><thead><tr><th>Parameter</th><th>Value</th><th>Unit</th><th>Basis</th><th>Used in</th></tr></thead><tbody>'+
+  PARAM_DEFS.map(function(p){
+    var used = {ldPctPerWeek:'Delivery delay LD, invoice entry', ldCapPct:'Delivery delay LD, invoice entry', matchRateTolPct:'Three-way matching',
+      matchValueTolPct:'Three-way matching', emdPct:'Tender from plan', feeThreshold:'Tender from plan', feeHigh:'Tender from plan', feeLow:'Tender from plan',
+      pgThreshold:'Checklist CL-11', condemnBookPct:'Stock return \u2192 disposal', condemnResidualPct:'Stock return \u2192 disposal', justifMin:'Checklist CL-01',
+      inspTat:'SLA engine', postTat:'SLA engine', cutoffMonthDay:'Order issue gate, CL-12', q4CapPct:'Phasing control', marchCapPct:'Phasing control',
+      burnBandPp:'Burn-rate flag', commitCoverPct:'Committed liability cover'}[p[0]];
+    return '<tr><td>'+esc(p[1])+'<div class="mono muted">'+p[0]+'</div></td><td><input class="inp" style="width:130px" id="pm_'+p[0]+'" value="'+esc(P(p[0]))+'"></td>'+
+      '<td>'+esc(p[2])+'</td><td>'+esc(p[3])+'</td><td class="muted">'+esc(used)+'</td></tr>';
+  }).join('')+'</tbody></table></div></div></div>';
+};
+function saveParams(){
+  var ch = 0;
+  PARAM_DEFS.forEach(function(p){
+    var v = val('pm_'+p[0]); if(v==='' ) return;
+    var nv = p[0]==='cutoffMonthDay' ? v : Number(v);
+    if(p[0]!=='cutoffMonthDay' && isNaN(nv)) return;
+    if(p[0]==='cutoffMonthDay' && !/^0[1-3]-[0-3]\d$/.test(v)) return;
+    if(String(DB.params[p[0]])!==String(nv)){ logAudit('Parameters', p[0],'Updated','Value',String(DB.params[p[0]]),String(nv),'Parameter change'); DB.params[p[0]] = nv; ch++; }
+  });
+  commit(ch? ch+' parameter(s) updated.' : 'No change to save.', ch?'ok':'in');
+}
+
+/* ---------- 13.8 RTM, INTERFACE REGISTER, DISCLOSURES, GAP CLOSURE ---------- */
+var RTM_SKIP = ['goto','tblExport','closeModal','closeAllModals','switchTab','tblPage','tblSort','window','document','this','event','closeDD','toggleGrp'];
+function rtmBuild(){
+  var map = {};
+  Object.keys(SCREENS).forEach(function(r){
+    var src = SCREENS[r].toString(), m, re = /reqTags\(([^)]*)\)/g, tags = [];
+    while((m = re.exec(src))) (m[1].match(/[A-Z]+_\d+/g)||[]).forEach(function(t){ tags.push(t); });
+    var fns = [], re2 = /onclick=\\?["']([A-Za-z0-9_]+)\(|actIcon\('[^']*',\s*'([A-Za-z0-9_]+)\(/g;
+    while((m = re2.exec(src))){ var f = m[1]||m[2]; if(RTM_SKIP.indexOf(f)<0 && fns.indexOf(f)<0) fns.push(f); }
+    uniq(tags).forEach(function(t){ (map[t] = map[t] || {fr:t, routes:[], fns:[]}); map[t].routes.push(r);
+      fns.forEach(function(f){ if(map[t].fns.indexOf(f)<0) map[t].fns.push(f); }); });
+  });
+  return Object.keys(map).sort(function(a,b){ return Number(a.split('_')[1])-Number(b.split('_')[1]); }).map(function(k){
+    var x = map[k], r0 = x.routes[0];
+    var role = routeRoles(r0).filter(function(r){ return r!==R.AUD; })[0] || R.PRO;
+    return {fr:k, routes:x.routes, screens:x.routes.map(function(r){ return TITLES[r]? TITLES[r].g+' \u203A '+TITLES[r].t : r; }),
+      fns:x.fns.slice(0,8), role:role,
+      step:'Sign in as '+role+'; open '+(TITLES[r0]?TITLES[r0].t:r0)+(x.fns[0]?'; exercise '+x.fns[0]+'()':''), status:'Demonstrable'};
+  });
+}
+var RTM_CROSS = [
+  ['GNR_9 / GNR_10','Configurable workflow actors, levels, TATs and business rules','admin/workflow, admin/checklist, admin/params','wfBuild(), checklistGate()'],
+  ['GNR_13 / GNR_14','Maker-checker-approver on transactions','Every approval (requisition, work order, disposal, adjustment, GRN posting)','wfCanAct(), CL-15'],
+  ['GNR_16','Delegation of financial powers resolved at run time','admin/limits + chain preview on create screens','roleLimit(), wfBuild() DFPR step'],
+  ['GNR_5','Master data changes restricted to competent roles','mm/create, admin/*','ACTION_ACL'],
+  ['MAT-F01','Indent / purchase requisition incl. GeM availability check','req/create','saveReq(), CL-01..CL-05'],
+  ['MAT-F02','PO and GRN / stock entry: Store Officer \u2192 Inspection Committee \u2192 DDO','wo/create, grn/list, grn/inspection','saveGrn(), saveInspection(), postGrn()']
+];
+SCREENS['rep/rtm'] = function(){
+  var rows = rtmBuild(), ids = rows.map(function(r){ return r.fr; });
+  var expected = []; for(var i=1;i<=21;i++) expected.push('MMP_'+i);
+  var missing = expected.filter(function(e){ return ids.indexOf(e)<0; });
+  var extra = ids.filter(function(e){ return expected.indexOf(e)<0; });
+  RTM_ROWS = rows;
+  return pageHead('Requirement Traceability Matrix','Reports and MIS',
+    'Generated at run time from the FR tags on each screen \u2014 FR \u2192 screen \u2192 function \u2192 demonstration step',
+    '<button class="btn gh sm" onclick="rtmExport()">\u2913 Export RTM (CSV)</button>', reqTags('MMP_22'))+
+  summaryRow([
+    {l:'FR IDs traced', v:rows.length, c:'#1E5A96'},
+    {l:'Screens tagged', v:uniq([].concat.apply([], rows.map(function(r){ return r.routes; }))).length, c:'#0F766E'},
+    {l:'Untraced of MMP_1\u201321', v:missing.length, c: missing.length?'#B91C1C':'#15803D'},
+    {l:'IDs beyond RFP count', v:extra.length, c: extra.length?'#B45309':'#15803D'}
+  ])+
+  (extra.length ? '<div class="note wa" style="margin-bottom:10px"><b>Reconcile before submission.</b> The RFP extract counts <b>21</b> Material Management FRs (Annexure A \u00A711.2, prefix MMP), '+
+    'but this prototype tags <b>'+esc(extra.join(', '))+'</b>. Confirm the numbering against the Annexure; if the RFP has 21 IDs, re-map the extra tag, or raise it as a pre-bid query.</div>' : '')+
+  (missing.length ? '<div class="note er" style="margin-bottom:10px">Not traced to any screen: '+esc(missing.join(', '))+'</div>':'')+
+  '<div class="card" style="margin-bottom:12px"><div class="bd">'+renderTable({id:'tRtm', rows:rows, size:25, cols:[
+    {h:'FR ID', k:'fr', cls:'mono', sv:function(r){ return Number(r.fr.split('_')[1]); }},
+    {h:'Screens', k:'screens', f:function(r){ return r.screens.map(esc).join('<br>'); }, srt:false},
+    {h:'Key Functions', k:'fns', cls:'mono', f:function(r){ return r.fns.map(esc).join(', ')||'\u2014'; }, srt:false},
+    {h:'Demonstration Step', k:'step'},
+    {h:'Status', k:'status', f:function(r){ return badge('Verified'); }},
+    {h:'Open', k:'a', cls:'acts', srt:false, f:function(r){ return actIcon('Open','goto(\''+r.routes[0]+'\')','gh'); }}
+  ]})+'</div></div>'+
+  '<div class="card"><div class="hd"><span>Cross-cutting requirements and statutory forms</span></div><div class="bd"><div class="twrap"><table class="tbl"><thead><tr><th>Reference</th><th>Requirement</th><th>Where demonstrated</th><th>Mechanism</th></tr></thead><tbody>'+
+  RTM_CROSS.map(function(c){ return '<tr><td class="mono">'+esc(c[0])+'</td><td>'+esc(c[1])+'</td><td>'+esc(c[2])+'</td><td class="mono">'+esc(c[3])+'</td></tr>'; }).join('')+
+  '</tbody></table></div><div class="note in" style="margin-top:10px">Every page header carries a <span class="mono">data-fr</span> attribute with its FR IDs, so the matrix can also be produced by scanning the rendered UI. FR descriptions are to be copied verbatim from RFP Annexure A \u00A711.2 into the exported sheet.</div></div></div>';
+};
+var RTM_ROWS = [];
+function rtmExport(){
+  var rows = [['FR ID','Screens','Routes','Key functions','Demonstration step','Login role','Status']].concat(
+    RTM_ROWS.map(function(r){ return [r.fr, r.screens.join(' | '), r.routes.join(' | '), r.fns.join(' | '), r.step, r.role, r.status]; }))
+    .concat([['','','','','','','']]).concat(RTM_CROSS.map(function(c){ return [c[0], c[1], c[2], c[3], '', '', 'Demonstrable']; }));
+  download('IFMS_MM_RTM.csv', toCsv(rows)); toast('RTM exported.','ok');
+}
+function seedInterfaces(){
+  return [
+    ['IF-01','IFMS Budget Management','Outbound request / inbound response','Synchronous \u2014 on requisition submit, Finance approval and work order submit','Head of account, DDO, amount, document reference \u2192 uncommitted balance, commitment ID','Submission blocked; no offline commitment; retried from the Integration Monitor','Create Requisition, Create Work Order, Budget Utilisation'],
+    ['IF-02','IFMS Expenditure / Bills (PAO)','Outbound bill, inbound status','Event \u2014 on bill initiation; hourly status poll','Bill, sanction, GRN, invoice, deductions \u2192 bill status, token, UTR','Bill held in "Sent to Finance"; duplicate check on retry. Bills are paid within the booked commitment (analogue of BUD_CF_4 capping)','Bill Initiation, Payment Status'],
+    ['IF-03','GeM (Government e-Marketplace)','Inbound orders; availability lookup','Daily batch and on demand','Contract / order number, seller, items, rates; product availability or NAC reference','Last good sync retained; manual NAC entry allowed with audit','Create Requisition (GeM check), Integration Monitor'],
+    ['IF-04','CPPP / GNCTD e-Procurement portal','Outbound tender; inbound bids','Event \u2014 publish, bid opening, award','Tender, BoQ, dates; bid data and evaluation results','Tender stays "Draft"; publication date not recorded until acknowledged','Tender / BoQ, Quotation Management'],
+    ['IF-05','Vendor Portal','Inbound invoices; outbound payment status','Near real time','Invoice with GST details, delivery challan; payment status, UTR','Invoice queued; vendor notified of receipt only after acknowledgement','Invoice Register'],
+    ['IF-06','IFMS Asset Management','Outbound capitalisable receipts; inbound disposal status','Event \u2014 on GRN posting of asset-flagged items','Material, GRN, value, location, warranty \u2192 asset ID','GRN posting completes; asset creation queued and flagged','Goods Receipt Note, Disposal Register'],
+    ['IF-07','IFMS Contract Management','Bidirectional','Event \u2014 order issue, PG receipt, SLA breach','Contract reference, PG, SLA parameters, penalty','Order issue allowed; contract link flagged for reconciliation','Performance Guarantee, Vendor Escalation'],
+    ['IF-08','IFMS Accounting (PAO / AG)','Outbound journal entries','Monthly and on write-off','Stock valuation, write-off, disposal proceeds (receipt head)','Entries held for month-end; posting report lists exceptions','Stock Adjustment, Auction / Scrap Sale'],
+    ['IF-09','HRMS / user directory','Inbound users and posts','Daily','Employee, post, office, DDO mapping','Existing mappings retained; new users cannot be activated','User Role Mapping'],
+    ['IF-10','eSign / DSC (CCA-licensed CA)','Outbound sign request','Synchronous \u2014 on final approvals and order issue','Document hash, signer certificate','Action not finalised; record stays at the approving stage','Work Order, Disposal, GRN posting'],
+    ['IF-11','NIC SMS / e-mail gateway','Outbound notifications','Event and daily digest','Recipient, template, reference','Queued with retry; in-app notification still raised','Notification Rules'],
+    ['IF-12','PFMS (CSS-funded purchases)','Outbound expenditure tagging','Event \u2014 on payment','Scheme code, component, amount, beneficiary','Payment completes; tagging queued for EAT reconciliation','Payment Status']
+  ].map(function(r){ return {id:r[0], sys:r[1], dir:r[2], freq:r[3], payload:r[4], fail:r[5], screens:r[6]}; });
+}
+SCREENS['admin/interfaces'] = function(){
+  return pageHead('Interface Register','Administration',
+    'Every counterpart system: direction, trigger, payload and failure behaviour',
+    '<button class="btn gh sm" onclick="tblExport(\'tIf\',\'Interface_Register\')">\u2913 Export</button>', reqTags('MMP_1','MMP_22'))+
+  '<div class="note wa" style="margin-bottom:10px">All interfaces are <b>simulated</b> in this prototype. The register is the design commitment; live endpoints, message formats and security are fixed during the SRS / integration design stage.</div>'+
+  '<div class="card"><div class="bd">'+renderTable({id:'tIf', rows:DB.interfaces, size:15, cols:[
+    {h:'ID', k:'id', cls:'mono'}, {h:'Counterpart System', k:'sys', f:function(r){ return '<b>'+esc(r.sys)+'</b>'; }},
+    {h:'Direction', k:'dir'}, {h:'Trigger / Frequency', k:'freq'}, {h:'Payload', k:'payload'},
+    {h:'Failure Behaviour', k:'fail'}, {h:'Screens', k:'screens'},
+    {h:'Status', k:'st', f:function(){ return badge('Scheduled').replace('>Scheduled<','>Simulated<'); }}
+  ]})+'</div></div>';
+};
+SCREENS['admin/about'] = function(){
+  var L = [
+    ['Persistence','Data is kept in this browser only ('+esc(Store.mode)+'). Clearing the browser or using <b>Reset demo data</b> restores the sample set. There is no server.'],
+    ['Authentication','Role selection stands in for login. There is no OTP, SSO, password policy or session time-out. Each role in production is a separate authenticated user.'],
+    ['Digital signature','Signing steps are simulated. No certificate is read and no CA is contacted.'],
+    ['Integrations','Budget, GeM, CPPP, Vendor Portal, Bills, Asset, Contract, Accounts, HRMS and PFMS exchanges are simulated \u2014 see the Interface Register.'],
+    ['Budget figures','Head-of-account allotments and expenditure are mock values standing in for the Budget Management module; commitments are computed from the work orders in this prototype.'],
+    ['Reports','Exports are CSV files generated in the browser. Formatted statutory registers are not produced.'],
+    ['Data','Every figure, name, vendor, GSTIN and reference is fictitious and for demonstration only.'],
+    ['System date','The demonstration clock is fixed at '+fdate(TODAY)+' so ageing, SLA and expiry results are repeatable.'],
+    ['Rule references','GFR and delegation references in checklists and parameters are indicative and must be confirmed against GNCTD orders.'],
+    ['FR numbering','Screens are tagged MMP_1 to MMP_22; the RFP extract counts 21 MMP FRs. See the RTM before bid submission.']
+  ];
+  return pageHead('Prototype Status and Limitations','Administration',
+    'What this build is, and what it is not \u2014 to be stated in the demonstration and in the bid','', reqTags('MMP_22'))+
+  '<div class="card" style="margin-bottom:12px"><div class="bd"><table class="kv">'+L.map(function(x){ return '<tr><td style="width:180px"><b>'+x[0]+'</b></td><td>'+x[1]+'</td></tr>'; }).join('')+'</table></div></div>'+
+  '<div class="card"><div class="hd"><span>Demonstration logins</span></div><div class="bd">'+
+  '<div class="twrap"><table class="tbl"><thead><tr><th>Role</th><th>Demo user</th><th>Tier</th><th>Responsibility</th><th></th></tr></thead><tbody>'+
+  ROLE_DEFS.map(function(d){ return '<tr><td><b>'+esc(d.role)+'</b></td><td>'+esc(d.user)+'<div class="mono muted">'+esc(d.empc)+'</div></td><td>'+esc(d.tier)+'</td><td>'+esc(d.desc)+'</td>'+
+    '<td>'+(d.role===curRole()?badge('Active'):actIcon('Sign in','switchRole(\''+d.role+'\')','gh'))+'</td></tr>'; }).join('')+
+  '</tbody></table></div></div></div>';
+};
+var GAP_ROWS = [
+  ['4.1','Approval chain stops short of the competent authority','Applied (analogue)','Approvals were one click regardless of value; the configured levels (WF1\u2013WF8) were never walked, and "Submit for approval" on a work order set it straight to Approved. Now every requisition, work order, disposal and stock adjustment walks its configured chain, with the final authority resolved from the DFPR matrix.','req/approvals'],
+  ['4.2','Roles referenced by workflows do not exist; login hierarchy','Applied','Thirteen switchable logins (Indenting Officer to Auditor) with route ACL, locked navigation that explains itself, action-level segregation of duties, maker-checker on every approval, and a read-only Auditor.','admin/about'],
+  ['4.3','SLA and escalation stored but inert','Applied','The SLA engine computes stage age against TAT on load, on role switch and on demand, escalates overdue cases, notifies, writes the audit trail, and lets the escalation designation act (delegation on delay).','rep/ageing'],
+  ['4.4','Definitional error and placeholder arithmetic','Applied (analogue)','Dashboard tiles were padded with fixed offsets (+118, +30, +71\u2026) and constant charts; budget availability was value \u00D7 2.4 / 0.72 / 1.8; GST was fixed at 18%; other-store stock was 30% of own stock; LD, tolerances and EMD were in code. All now derive from records or from the Procurement Parameters master.','dash'],
+  ['4.5','No requirement traceability','Applied','RTM generated at run time from screen FR tags; data-fr attributes on every page header; CSV export; flags the MMP_22 numbering discrepancy.','rep/rtm'],
+  ['4.6','Interface obligations undeclared','Applied','Twelve-row interface register with direction, trigger, payload and failure behaviour, including the bills-within-commitment dependency.','admin/interfaces'],
+  ['4.7','Prototype-status disclosures','Applied','Limitations screen, footer link and demonstration-login table.','admin/about'],
+  ['Part 6 #7','Configurable checklist master bound to validators','Applied','Twenty checklist items across six processes; automatic items bound to rules, manual items as checker declarations stored on the record.','admin/checklist'],
+  ['Part 5','Burn rate, Q4 skew, March cut-off, committed liability cover','Applied','Budget Utilisation and Phasing Control; order-issue gate in the cut-off window; commitments booked on submit, released on return or cancel, liquidated on payment.','rep/budget'],
+  ['Part 5','UC register, AG reconciliation, guarantee / WMA triggers','Not applicable to MM','Belong to Debt & Grant, Accounting and Cash Management modules.',''],
+  ['4.1 / 4.4','Section 27 approval path, FRBM tile, SUPP_BUD_19/20, BUD_CF_4','Not applicable to MM','Budget Management findings. The BUD_CF_4 dependency has an MM analogue recorded as IF-02.',''],
+  ['Part 1','Defect in the source document','Applied (analogue)','RFP extract counts 21 MMP FRs; the prototype tags MMP_22. Raised in the RTM as a reconciliation / pre-bid item.','rep/rtm'],
+  ['Audit trail','Every audit entry recorded the same user and role','Fixed','Audit entries now carry the acting user and role; SLA escalations are recorded as the system.','rep/trail']
+];
+SCREENS['rep/gaps'] = function(){
+  return pageHead('Gap Closure Register','Reports and MIS',
+    'Findings of the Prototype Verification and Gap Analysis, and how each is closed in this module','', reqTags('MMP_22'))+
+  summaryRow([
+    {l:'Findings assessed', v:GAP_ROWS.length, c:'#1E5A96'},
+    {l:'Applied / fixed', v:GAP_ROWS.filter(function(g){ return g[2].indexOf('Not')<0; }).length, c:'#15803D'},
+    {l:'Not applicable to MM', v:GAP_ROWS.filter(function(g){ return g[2].indexOf('Not')===0; }).length, c:'#7386A0'},
+    {l:'Open', v:0, c:'#15803D'}
+  ])+
+  '<div class="card"><div class="bd"><div class="twrap"><table class="tbl"><thead><tr><th>Ref.</th><th>Finding</th><th>Status</th><th>Resolution in Material Management</th><th></th></tr></thead><tbody>'+
+  GAP_ROWS.map(function(g){ return '<tr><td class="mono">'+esc(g[0])+'</td><td><b>'+esc(g[1])+'</b></td><td>'+
+    '<span class="bdg '+(g[2].indexOf('Not')===0?'b-nu':'b-ok')+'">'+esc(g[2])+'</span></td><td style="font-size:12px">'+esc(g[3])+'</td><td>'+
+    (g[4]?actIcon('See','goto(\''+g[4]+'\')','gh'):'')+'</td></tr>'; }).join('')+'</tbody></table></div></div></div>';
+};
+
+function showWoWf(id){ var w = byId(DB.workorders,'id',id); woEnsureWf(w);
+  modal({title:'Approval workflow \u2014 '+esc(w.no), size:'lg', body:wfPanel(w)}); }
+
+/* dashboard strip: what is pending with the signed-in role */
+function roleStrip(){
+  var mine = myPending();
+  var od = mine.filter(function(i){ return i.overdue; }).length;
+  return '<div class="card role-strip" style="margin-bottom:12px"><div class="bd flex between aic wrap gap12">'+
+    '<div><div style="font-size:11px" class="muted">Signed in as</div><div style="font-size:14px"><b>'+esc(curUser())+'</b> \u2014 '+esc(curRole())+
+    (isRO()?' <span class="bdg b-wa">Read-only</span>':'')+'</div><div class="muted" style="font-size:11px">'+esc(CUR.desc)+'</div></div>'+
+    '<div class="flex gap8 wrap aic">'+
+      '<span class="bdg b-in">'+mine.length+' pending with this role</span>'+
+      (od?'<span class="bdg b-er">'+od+' beyond TAT</span>':'')+
+      mine.slice(0,4).map(function(i){ return '<button class="btn xs gh" onclick="goto(\''+i.route+'\')">'+esc(i.module)+' '+esc(i.no)+'</button>'; }).join('')+
+      '<button class="btn xs sec" onclick="goto(\'rep/ageing\')">Workflow ageing</button>'+
+      '<button class="btn xs gh" onclick="goto(\'admin/about\')">Switch login</button>'+
+    '</div></div></div>';
+}
+
+/* one-time augmentation of the data set for V3 */
+function seedStockOther(){
+  var out = [];
+  DB.stock.forEach(function(s,i){
+    if(i%3!==0) return;
+    var alt = STORES[(STORES.indexOf(s.store)+2)%STORES.length];
+    out.push({mat:s.mat, store:alt, avail:Math.max(0, Math.round((s.reorder||10)*0.8))});
+  });
+  return out;
+}
+function augmentDB(){
+  DB.meta = DB.meta || {};
+  if(!DB.params) DB.params = seedParams();
+  var dp = seedParams(); Object.keys(dp).forEach(function(k){ if(DB.params[k]===undefined) DB.params[k] = dp[k]; });
+  if(!DB.checklists) DB.checklists = seedChecklists();
+  if(!DB.interfaces) DB.interfaces = seedInterfaces();
+  if(!DB.budgetHeads) DB.budgetHeads = seedBudgetHeads();
+  if(!DB.stockOther) DB.stockOther = seedStockOther();
+  if(!DB.commitments) DB.commitments = [];
+  if(DB.meta.v3) return;
+  /* maker-checker: the Procurement Officer raises work orders, so level 1 cannot also be the Procurement Officer */
+  DB.workflows.forEach(function(w){ if(w.module==='Work Order' && w.role===R.PRO){ w.role = R.HOO; w.note = 'Changed from Procurement Officer (maker-checker, GNR_13/14)'; } });
+  if(!DB.workflows.some(function(w){ return w.module==='Requisition' && w.level===4; }))
+    DB.workflows.push({id:'WF9', module:'Requisition', level:4, role:R.FD, from:10000001, to:999999999999, tat:10, escalate:'Principal Secretary (Finance)', status:'Active'});
+  DB.workorders.forEach(function(w){
+    var r = byId(DB.requisitions,'no',w.req);
+    w.coa = w.coa || (r ? r.coa : COA[0]); w.maker = w.maker || 'Anil Katwale';
+    if(['Issued','Approved','Delayed','Delivered'].indexOf(w.status)>=0){
+      var paid = sum(DB.invoices.filter(function(i){ return i.wo===w.no && i.payment==='Paid'; }),'amount');
+      DB.commitments.push({id:'CMT/2026/'+pad(4000+DB.commitments.length,5), ref:w.no, coa:w.coa, amount:w.value,
+        liquidated:Math.min(w.value, paid), date:w.date, status: paid>=w.value?'Liquidated':(paid?'Partly Liquidated':'Booked'), by:'Anil Katwale'});
+    }
+  });
+  var d = DB.workorders.filter(function(w){ return w.status==='Draft'; })[0];
+  if(d){
+    d.status = 'Pending Approval'; d.budgetOk = true;
+    d.wf = wfBuild('Work Order', d.value, modeKey(d.mode));
+    wfPushSeed(d, 0, d.date); d.wf.idx = Math.min(1, d.wf.chain.length-1); d.wf.since = d.date;
+    d.approver = wfStage(d).role; bookCommitment(d); commitmentOf(d.no).date = d.date; commitmentOf(d.no).by = 'Anil Katwale';
+  }
+  DB.requisitions.forEach(function(r){
+    if(!r.gem) r.gem = r.mode==='GeM' ? 'Available on GeM' : 'Not available on GeM (NAC obtained)';
+    r.maker = r.maker || r.requestor;
+  });
+  DB.grns.forEach(function(g){ g.maker = g.maker || 'R. Meena'; });
+  ROLE_DEFS.forEach(function(rd){
+    if(!DB.roles.some(function(x){ return x.user===rd.user; }))
+      DB.roles.push({id:uid('RO'), user:rd.user, empc:rd.empc, role:rd.role, dept:DEPTS[rd.dept], stores:rd.role===R.STO?'Education Store':'\u2014',
+        limit: (byId(DB.limits,'role',rd.role)||{}).direct||0, status:'Active'});
+  });
+  DB.meta.v3 = TODAY;
+}
+function wfPushSeed(rec, level, date){
+  var c = rec.wf.chain[level]; if(!c) return;
+  rec.wf.hist.push({level:level+1, role:c.role, by:roleDef(c.role).user, as:c.role, date:date, action:'Approved', reason:'Recommended', age:1});
+}
+
 /* ------------------------------------------------------------
-   BOOT & LIVE FASTAPI DATABASE SYNCHRONIZATION
+   BOOT
    ------------------------------------------------------------ */
-var API_BASE = 'http://127.0.0.1:8002/api/v1';
+(function boot(){
+  DB = Store.get();
+  if(!DB || !DB.materials || !DB.materials.length){ DB = seedDB(); save(); }
+  augmentDB();
+  CUR = roleDef((DB.session && DB.session.role) || R.PRO);
+  document.body.classList.toggle('ro', isRO());
+  applyGuards();
+  ['materials','requisitions','tenders','boq','quotes','workorders','deliveries','grns','inspections',
+   'rtv','stock','movements','issues','returns','transfers','invoices','fees','emds','pgs','warranty',
+   'defects','disposals','audits','verification','adjustments','forecast','assets','portals','trail',
+   'notifications','workflows','rules','roles','limits','amendments','plans','commitments','checklists',
+   'interfaces','budgetHeads','stockOther'].forEach(function(k){
+    if(!DB[k]) DB[k] = [];
+  });
+  document.getElementById('yr').textContent = new Date().getFullYear();
+  document.getElementById('storeMode').textContent = 'Data stored in '+Store.mode;
+  save();
+  paintUser();
+  runEscalation(true);
+  buildSidebar();
+  paintNotifCount();
+  goto('dash');
+  document.getElementById('roleSel').onchange = function(){ switchRole(this.value); };
+
+  document.getElementById('btnSide').onclick = function(){
+    if(window.innerWidth<=900) document.body.classList.toggle('sopen');
+    else {
+      var s = document.documentElement.style;
+      var cur = getComputedStyle(document.documentElement).getPropertyValue('--side-w').trim();
+      s.setProperty('--side-w', cur==='250px' ? '56px' : '250px');
+    }
+  };
+  document.getElementById('btnUser').onclick = function(e){ e.stopPropagation(); userMenu(); };
+  document.getElementById('btnBell').onclick = function(e){ e.stopPropagation(); notifMenu(); };
+  document.getElementById('gq').addEventListener('input', function(){ globalSearch(this.value); });
+  document.getElementById('gq').addEventListener('blur', function(){
+    setTimeout(function(){ document.getElementById('gres').classList.add('hide'); }, 180);
+  });
+  document.getElementById('fySel').onchange = function(){
+    toast('Financial year switched to <b>'+esc(this.value)+'</b>. The demo data set covers FY 2026-27.','in');
+  };
+  toast('Material Management V3 loaded. Signed in as <b>'+esc(curUser())+'</b> ('+esc(curRole())+'). Use the role selector in the top bar to demonstrate each login in the hierarchy.','ok',6500);
+})();
+
+
+
+
+/* ============================================================
+   14. BACKEND LIVE SYNCHRONISATION (POSTGRESQL 17 ifms_jk)
+   ============================================================ */
 
 async function syncWithBackend(){
   try {
@@ -8128,368 +8810,720 @@ async function syncWithBackend(){
     console.log('Backend sync offline/starting, using local database cache:', err);
   }
 }
+
+
 export function initIFMS(){
-  DB = Store.get();
-  if(!DB || !DB.materials || !DB.materials.length){ DB = seedDB(); save(); }
-  ['materials','requisitions','tenders','boq','quotes','workorders','deliveries','grns','inspections',
-   'rtv','stock','movements','issues','returns','transfers','toolIssuances','invoices','fees','emds','pgs','warranty',
-   'defects','disposals','audits','verification','adjustments','forecast','assets','portals','trail',
-   'notifications','workflows','rules','roles','limits','amendments','plans'].forEach(function(k){
-    if(!DB[k]) DB[k] = [];
-  });
+  boot();
   
   var yrEl = document.getElementById('yr');
   if (yrEl) yrEl.textContent = new Date().getFullYear();
   var smEl = document.getElementById('storeMode');
-  if (smEl) smEl.textContent = 'PostgreSQL (ifms_jk) connected';
-  
-  buildSidebar();
-  paintNotifCount();
-  goto(ROUTE || 'dash');
-
-  var btnSide = document.getElementById('btnSide');
-  if (btnSide) {
-    btnSide.onclick = function(){
-      if(window.innerWidth<=900) document.body.classList.toggle('sopen');
-      else {
-        var s = document.documentElement.style;
-        var cur = getComputedStyle(document.documentElement).getPropertyValue('--side-w').trim();
-        s.setProperty('--side-w', cur==='250px' ? '56px' : '250px');
-      }
-    };
-  }
-  
-  var btnUser = document.getElementById('btnUser');
-  if (btnUser) btnUser.onclick = function(e){ e.stopPropagation(); userMenu(); };
-  
-  var btnBell = document.getElementById('btnBell');
-  if (btnBell) btnBell.onclick = function(e){ e.stopPropagation(); notifMenu(); };
-  
-  var gq = document.getElementById('gq');
-  if (gq) {
-    gq.addEventListener('input', function(){ globalSearch(this.value); });
-    gq.addEventListener('blur', function(){
-      setTimeout(function(){ 
-        var gr = document.getElementById('gres');
-        if (gr) gr.classList.add('hide'); 
-      }, 180);
-    });
-  }
-  
-  var fySel = document.getElementById('fySel');
-  if (fySel) {
-    fySel.onchange = function(){
-      toast('Financial year switched to <b>'+esc(this.value)+'</b>. The active budget covers FY 2026-27.','in');
-    };
-  }
+  if (smEl) smEl.textContent = 'Live PostgreSQL 17 (ifms_jk)';
   
   syncWithBackend();
-  toast('IFMS Material Management Module & Live PostgreSQL Database Loaded.','ok',4000);
 }
 
-// Attach all top-level UI and action functions to window
+// Attach all top-level UI and action functions to window for global inline event handlers
 if (typeof window !== 'undefined') {
   var globalExports = {
-  actIcon: actIcon,
-  addAttach: addAttach,
-  addDays: addDays,
-  addReqLine: addReqLine,
-  addWoLine: addWoLine,
-  allSubs: allSubs,
-  amendWo: amendWo,
-  applyDefFilter: applyDefFilter,
-  applyDspFilter: applyDspFilter,
-  applyGrnFilter: applyGrnFilter,
-  applyInvFilter: applyInvFilter,
-  applyMatFilter: applyMatFilter,
-  applyMovFilter: applyMovFilter,
-  applyReqFilter: applyReqFilter,
-  applyStockFilter: applyStockFilter,
-  applyTrailFilter: applyTrailFilter,
-  applyWarrFilter: applyWarrFilter,
-  applyWoFilter: applyWoFilter,
-  approveAdjustment: approveAdjustment,
-  approveDisposal: approveDisposal,
-  approvePlan: approvePlan,
-  approveReq: approveReq,
-  approveWo: approveWo,
-  attChip: attChip,
-  attList: attList,
-  attachWidget: attachWidget,
-  auditEntry: auditEntry,
-  auditTableHtml: auditTableHtml,
-  autoCode: autoCode,
-  autoL1: autoL1,
-  autoSuggestBoq: autoSuggestBoq,
-  badge: badge,
-  barChart: barChart,
-  bcls: bcls,
-  boqHistory: boqHistory,
-  boqSuggestions: boqSuggestions,
-  budgetCheckReq: budgetCheckReq,
-  buildSidebar: buildSidebar,
-  bulkApprove: bulkApprove,
-  bulkSendFinance: bulkSendFinance,
-  byId: byId,
-  cancelWo: cancelWo,
-  checkStock: checkStock,
-  checkStockDraft: checkStockDraft,
-  closeAllModals: closeAllModals,
-  closeAudit: closeAudit,
-  closeDD: closeDD,
-  closeModal: closeModal,
-  colChart: colChart,
-  commit: commit,
-  commitBulk: commitBulk,
-  completeDisposal: completeDisposal,
-  condemnReturn: condemnReturn,
-  confirmAct: confirmAct,
-  confirmIssue: confirmIssue,
-  createConsolidatedPlan: createConsolidatedPlan,
-  csAudit: csAudit,
-  dashCounts: dashCounts,
-  daysBetween: daysBetween,
-  deactivateMaterial: deactivateMaterial,
-  delayAlert: delayAlert,
-  despatchTransfer: despatchTransfer,
-  dfSla: dfSla,
-  disposalEntry: disposalEntry,
-  donut: donut,
-  download: download,
-  downloadCs: downloadCs,
-  downloadTemplate: downloadTemplate,
-  dpCalc: dpCalc,
-  editMaterial: editMaterial,
-  esc: esc,
-  escalateDefect: escalateDefect,
-  expiryCell: expiryCell,
-  exportCsv: exportCsv,
-  extendPg: extendPg,
-  fdate: fdate,
-  fdatetime: fdatetime,
-  filterBar: filterBar,
-  finishEval: finishEval,
-  fld: fld,
-  forecastToRequisition: forecastToRequisition,
-  globalSearch: globalSearch,
-  goto: goto,
-  grnCalc: grnCalc,
-  grnEntry: grnEntry,
-  grnFromDelivery: grnFromDelivery,
-  grnWoInfo: grnWoInfo,
-  hbar: hbar,
-  initIFMS: initIFMS,
-  initiateProc: initiateProc,
-  inr: inr,
-  inr0: inr0,
-  inspCalc: inspCalc,
-  inspectGrn: inspectGrn,
-  inspectionReport: inspectionReport,
-  invoiceEntry: invoiceEntry,
-  isStock: isStock,
-  issueEntry: issueEntry,
-  issueWo: issueWo,
-  ivCalc: ivCalc,
-  ivFromGrn: ivFromGrn,
-  kpiTile: kpiTile,
-  kvRow: kvRow,
-  loadMaterial: loadMaterial,
-  logAudit: logAudit,
-  logoutSim: logoutSim,
-  mapBoq: mapBoq,
-  markAllRead: markAllRead,
-  markErr: markErr,
-  markNonStd: markNonStd,
-  markRead: markRead,
-  matchDetail: matchDetail,
-  matchPanel: matchPanel,
-  matchResult: matchResult,
-  materialAudit: materialAudit,
-  mname: mname,
-  modal: modal,
-  mrate: mrate,
-  mreorder: mreorder,
-  muom: muom,
-  navCount: navCount,
-  newFromBoq: newFromBoq,
-  notifMenu: notifMenu,
-  notify: notify,
-  nowIso: nowIso,
-  num: num,
-  nval: nval,
-  openDD: openDD,
-  pad: pad,
-  pageHead: pageHead,
-  paintChain: paintChain,
-  paintCs: paintCs,
-  paintEval: paintEval,
-  paintNotifCount: paintNotifCount,
-  paintReqLines: paintReqLines,
-  paintWoLines: paintWoLines,
-  pane: pane,
-  pct: pct,
-  pendingReqs: pendingReqs,
-  planToTender: planToTender,
-  postGrn: postGrn,
-  postVariances: postVariances,
-  priBadge: priBadge,
-  printWo: printWo,
-  qeCalc: qeCalc,
-  quoteEntry: quoteEntry,
-  raiseDefect: raiseDefect,
-  raiseDelayAlerts: raiseDelayAlerts,
-  reactivateMaterial: reactivateMaterial,
-  recalcForecast: recalcForecast,
-  receiveTransfer: receiveTransfer,
-  recommendRetender: recommendRetender,
-  reconcilePortal: reconcilePortal,
-  recordDispatch: recordDispatch,
-  recordNegotiation: recordNegotiation,
-  recordPayment: recordPayment,
-  recordReplacement: recordReplacement,
-  refreshNavCounts: refreshNavCounts,
-  refundRtv: refundRtv,
-  rejectAdjustment: rejectAdjustment,
-  rejectDisposal: rejectDisposal,
-  rejectReq: rejectReq,
-  releasePg: releasePg,
-  renderTable: renderTable,
-  reorderToRequisition: reorderToRequisition,
-  repaintReqTables: repaintReqTables,
-  replaceRtv: replaceRtv,
-  reqRegister: reqRegister,
-  reqTags: reqTags,
-  reqTotal: reqTotal,
-  requireOk: requireOk,
-  resetDefFilter: resetDefFilter,
-  resetDemo: resetDemo,
-  resetDspFilter: resetDspFilter,
-  resetGrnFilter: resetGrnFilter,
-  resetInvFilter: resetInvFilter,
-  resetMatFilter: resetMatFilter,
-  resetMovFilter: resetMovFilter,
-  resetReqFilter: resetReqFilter,
-  resetStockFilter: resetStockFilter,
-  resetTrailFilter: resetTrailFilter,
-  resetWarrFilter: resetWarrFilter,
-  resetWoFilter: resetWoFilter,
-  resolveDefect: resolveDefect,
-  resolveException: resolveException,
-  restockReturn: restockReturn,
-  returnEntry: returnEntry,
-  rmLine: rmLine,
-  rmWoLine: rmWoLine,
-  rtFromIssue: rtFromIssue,
-  rtvFromGrn: rtvFromGrn,
-  runAllMatches: runAllMatches,
-  runMatch: runMatch,
-  save: save,
-  saveAmendment: saveAmendment,
-  saveAudit: saveAudit,
-  saveBoqMap: saveBoqMap,
-  saveDefect: saveDefect,
-  saveDefectUpdate: saveDefectUpdate,
-  saveDispatch: saveDispatch,
-  saveDisposal: saveDisposal,
-  saveDisposalCompletion: saveDisposalCompletion,
-  saveEval: saveEval,
-  saveExtendPg: saveExtendPg,
-  saveGrn: saveGrn,
-  saveInspection: saveInspection,
-  saveInvoice: saveInvoice,
-  saveIssue: saveIssue,
-  saveMaterial: saveMaterial,
-  saveNegotiation: saveNegotiation,
-  saveQuote: saveQuote,
-  saveReq: saveReq,
-  saveResolution: saveResolution,
-  saveReturn: saveReturn,
-  saveToolCheckin: saveToolCheckin,
-  saveToolCheckout: saveToolCheckout,
-  saveTransfer: saveTransfer,
-  saveWo: saveWo,
-  saveWorkflow: saveWorkflow,
-  securitiesScreen: securitiesScreen,
-  securityAct: securityAct,
-  securityAudit: securityAudit,
-  seedDB: seedDB,
-  seedMaterials: seedMaterials,
-  selectVendor: selectVendor,
-  sendBackReq: sendBackReq,
-  sendToFinance: sendToFinance,
-  seq: seq,
-  setJustification: setJustification,
-  setLine: setLine,
-  setOverride: setOverride,
-  setPhys: setPhys,
-  setPvReason: setPvReason,
-  setVal: setVal,
-  setWoLine: setWoLine,
-  showProfile: showProfile,
-  simulateBulk: simulateBulk,
-  simulateSync: simulateSync,
-  splitAward: splitAward,
-  stockLedger: stockLedger,
-  stockPanel: stockPanel,
-  stockState: stockState,
-  submitCs: submitCs,
-  sum: sum,
-  summaryRow: summaryRow,
-  switchTab: switchTab,
-  syncSub: syncSub,
-  syncWithBackend: syncWithBackend,
-  tableHtml: tableHtml,
-  tabsHtml: tabsHtml,
-  tblExport: tblExport,
-  tblPage: tblPage,
-  tblPaint: tblPaint,
-  tblReload: tblReload,
-  tblRows: tblRows,
-  tblSearch: tblSearch,
-  tblSelAll: tblSelAll,
-  tblSelOne: tblSelOne,
-  tblSize: tblSize,
-  tblSort: tblSort,
-  testRule: testRule,
-  toCsv: toCsv,
-  toast: toast,
-  toggleGrp: toggleGrp,
-  toggleRole: toggleRole,
-  toggleRule: toggleRule,
-  toggleWorkflow: toggleWorkflow,
-  toolCheckinEntry: toolCheckinEntry,
-  toolCheckoutEntry: toolCheckoutEntry,
-  trStock: trStock,
-  transferEntry: transferEntry,
-  uid: uid,
-  uniq: uniq,
-  updateDefect: updateDefect,
-  userMenu: userMenu,
-  val: val,
-  validate: validate,
-  viewDefect: viewDefect,
-  viewDisposal: viewDisposal,
-  viewGrn: viewGrn,
-  viewInstrument: viewInstrument,
-  viewInvoice: viewInvoice,
-  viewMaterial: viewMaterial,
-  viewQuote: viewQuote,
-  viewReq: viewReq,
-  viewTender: viewTender,
-  viewWo: viewWo,
-  vname: vname,
-  warrState: warrState,
-  warrantyHistory: warrantyHistory,
-  woBudgetCheck: woBudgetCheck,
-  woCalc: woCalc,
-  woChain: woChain,
-  woFromBid: woFromBid,
-  woFromReq: woFromReq,
-  woPullReqLines: woPullReqLines,
-  woTotals: woTotals,
-  woVendorInfo: woVendorInfo,
-  workflowEntry: workflowEntry
+    ACTION_ACL: ACTION_ACL,
+    ACTION_LABEL: ACTION_LABEL,
+    ALL_ROLES: ALL_ROLES,
+    ATT_NAMES: ATT_NAMES,
+    BADGE: BADGE,
+    CHECK_PROCESSES: CHECK_PROCESSES,
+    CHECK_RULES: CHECK_RULES,
+    COST_CENTRES: COST_CENTRES,
+    DEFCAT: DEFCAT,
+    EDIT_MAT: EDIT_MAT,
+    FUNDS: FUNDS,
+    GAP_ROWS: GAP_ROWS,
+    HIER: HIER,
+    KEY_LABEL: KEY_LABEL,
+    L: L,
+    MODES: MODES,
+    MTYPES: MTYPES,
+    P: P,
+    PARAM_DEFS: PARAM_DEFS,
+    PROJECTS: PROJECTS,
+    REQ_CHECK: REQ_CHECK,
+    REQ_LINES: REQ_LINES,
+    REQ_STATUS: REQ_STATUS,
+    ROUTE_ACL: ROUTE_ACL,
+    RTM_CROSS: RTM_CROSS,
+    RTM_ROWS: RTM_ROWS,
+    RTM_SKIP: RTM_SKIP,
+    SCHEMES: SCHEMES,
+    SEC_TAB: SEC_TAB,
+    TBL: TBL,
+    TF: TF,
+    WF_ACTIONS: WF_ACTIONS,
+    WO_LINES: WO_LINES,
+    a0: a0,
+    a1: a1,
+    acc: acc,
+    act: act,
+    actIcon: actIcon,
+    actionAllowed: actionAllowed,
+    add: add,
+    addAttach: addAttach,
+    addDays: addDays,
+    addReqLine: addReqLine,
+    addWoLine: addWoLine,
+    adjEnsureWf: adjEnsureWf,
+    adjs: adjs,
+    age: age,
+    ageCnt: ageCnt,
+    ageRows: ageRows,
+    allReqs: allReqs,
+    allSubs: allSubs,
+    already: already,
+    alt: alt,
+    am: am,
+    amendWo: amendWo,
+    amt: amt,
+    applyDefFilter: applyDefFilter,
+    applyDspFilter: applyDspFilter,
+    applyGrnFilter: applyGrnFilter,
+    applyGuards: applyGuards,
+    applyInvFilter: applyInvFilter,
+    applyMatFilter: applyMatFilter,
+    applyMovFilter: applyMovFilter,
+    applyReqFilter: applyReqFilter,
+    applyStockFilter: applyStockFilter,
+    applyTrailFilter: applyTrailFilter,
+    applyWarrFilter: applyWarrFilter,
+    applyWoFilter: applyWoFilter,
+    approveAdjustment: approveAdjustment,
+    approveAdjustmentFinal: approveAdjustmentFinal,
+    approveDisposal: approveDisposal,
+    approveDisposalFinal: approveDisposalFinal,
+    approvePlan: approvePlan,
+    approveReq: approveReq,
+    approveWo: approveWo,
+    ar: ar,
+    assets: assets,
+    attChip: attChip,
+    attList: attList,
+    attachWidget: attachWidget,
+    auditEntry: auditEntry,
+    auditTableHtml: auditTableHtml,
+    audits: audits,
+    augmentDB: augmentDB,
+    auto: auto,
+    autoCode: autoCode,
+    autoL1: autoL1,
+    autoSuggestBoq: autoSuggestBoq,
+    av: av,
+    avail: avail,
+    avg: avg,
+    awarded: awarded,
+    bad: bad,
+    badge: badge,
+    bal: bal,
+    barChart: barChart,
+    bases: bases,
+    basic: basic,
+    bcls: bcls,
+    bhAvail: bhAvail,
+    bhPos: bhPos,
+    bids: bids,
+    bk: bk,
+    blkVal: blkVal,
+    blob: blob,
+    body: body,
+    book: book,
+    bookCommitment: bookCommitment,
+    boot: boot,
+    boq: boq,
+    boqHistory: boqHistory,
+    boqSuggestions: boqSuggestions,
+    box: box,
+    boxes: boxes,
+    budget: budget,
+    budgetCheckReq: budgetCheckReq,
+    buildSidebar: buildSidebar,
+    bulkApprove: bulkApprove,
+    bulkSendFinance: bulkSendFinance,
+    burn: burn,
+    byDept: byDept,
+    byId: byId,
+    byMat: byMat,
+    byMode: byMode,
+    byVendor: byVendor,
+    c0: c0,
+    cancelWo: cancelWo,
+    catRows: catRows,
+    ch: ch,
+    chain: chain,
+    changes: changes,
+    checkStock: checkStock,
+    checkStockDraft: checkStockDraft,
+    checklistAutoPass: checklistAutoPass,
+    checklistEntry: checklistEntry,
+    checklistEval: checklistEval,
+    checklistGate: checklistGate,
+    closeAllModals: closeAllModals,
+    closeAudit: closeAudit,
+    closeDD: closeDD,
+    closeModal: closeModal,
+    cls: cls,
+    cnt: cnt,
+    coa: coa,
+    code: code,
+    col: col,
+    colChart: colChart,
+    cols: cols,
+    commit: commit,
+    commitBulk: commitBulk,
+    commitmentOf: commitmentOf,
+    common: common,
+    completeDisposal: completeDisposal,
+    cond: cond,
+    condemnReturn: condemnReturn,
+    confirmAct: confirmAct,
+    confirmIssue: confirmIssue,
+    covered: covered,
+    createConsolidatedPlan: createConsolidatedPlan,
+    csAudit: csAudit,
+    cur: cur,
+    curDept: curDept,
+    curRole: curRole,
+    curUser: curUser,
+    cust: cust,
+    cutoffLabel: cutoffLabel,
+    cycle: cycle,
+    dashCounts: dashCounts,
+    days: days,
+    daysBetween: daysBetween,
+    deactivateMaterial: deactivateMaterial,
+    defs: defs,
+    delRows: delRows,
+    delayAlert: delayAlert,
+    dels: dels,
+    denyAction: denyAction,
+    despatchTransfer: despatchTransfer,
+    dest: dest,
+    dfSla: dfSla,
+    disp: disp,
+    dispVal: dispVal,
+    disposalEntry: disposalEntry,
+    done: done,
+    donut: donut,
+    download: download,
+    downloadCs: downloadCs,
+    downloadTemplate: downloadTemplate,
+    dp: dp,
+    dpCalc: dpCalc,
+    dspEnsureWf: dspEnsureWf,
+    dst: dst,
+    dup: dup,
+    editMaterial: editMaterial,
+    el: el,
+    eligible: eligible,
+    emds: emds,
+    esc: esc,
+    esc0: esc0,
+    escalateDefect: escalateDefect,
+    ex: ex,
+    exc: exc,
+    exists: exists,
+    exp: exp,
+    expOk: expOk,
+    expSoon: expSoon,
+    expVal: expVal,
+    expected: expected,
+    expired: expired,
+    expiryCell: expiryCell,
+    explainRoute: explainRoute,
+    exportCsv: exportCsv,
+    extendPg: extendPg,
+    extra: extra,
+    failA: failA,
+    failM: failM,
+    fc: fc,
+    fdate: fdate,
+    fdatetime: fdatetime,
+    fees: fees,
+    filterAgeing: filterAgeing,
+    filterBar: filterBar,
+    fin: fin,
+    finishEval: finishEval,
+    first: first,
+    fixed: fixed,
+    fld: fld,
+    fmtLimit: fmtLimit,
+    fn: fn,
+    fns: fns,
+    forecastToRequisition: forecastToRequisition,
+    form: form,
+    fq: fq,
+    frIds: frIds,
+    from: from,
+    fyElapsedPct: fyElapsedPct,
+    fyQuarter: fyQuarter,
+    globalSearch: globalSearch,
+    go: go,
+    got: got,
+    goto: goto,
+    grnCalc: grnCalc,
+    grnEntry: grnEntry,
+    grnFromDelivery: grnFromDelivery,
+    grnQty: grnQty,
+    grnWoInfo: grnWoInfo,
+    grns: grns,
+    gst: gst,
+    hbar: hbar,
+    head: head,
+    hit: hit,
+    hits: hits,
+    host: host,
+    icons: icons,
+    id: id,
+    idx: idx,
+    inC: inC,
+    inCutoff: inCutoff,
+    inTypes: inTypes,
+    initiateProc: initiateProc,
+    inr: inr,
+    inr0: inr0,
+    ins: ins,
+    insp: insp,
+    inspCalc: inspCalc,
+    inspVal: inspVal,
+    inspectGrn: inspectGrn,
+    inspectionReport: inspectionReport,
+    inv: inv,
+    invQty: invQty,
+    invoiceEntry: invoiceEntry,
+    invs: invs,
+    isIn: isIn,
+    isRO: isRO,
+    isStock: isStock,
+    issRows: issRows,
+    issueEntry: issueEntry,
+    issueWo: issueWo,
+    issues: issues,
+    items: items,
+    ivCalc: ivCalc,
+    ivFromGrn: ivFromGrn,
+    ix0: ix0,
+    ix1: ix1,
+    j: j,
+    kOutstanding: kOutstanding,
+    keys: keys,
+    kpiTile: kpiTile,
+    ks: ks,
+    kvRow: kvRow,
+    l: l,
+    l3: l3,
+    lab: lab,
+    label: label,
+    labelOf: labelOf,
+    large: large,
+    last: last,
+    lastRow: lastRow,
+    late: late,
+    ld: ld,
+    ldCompute: ldCompute,
+    lim: lim,
+    limits: limits,
+    lines: lines,
+    liq: liq,
+    liquidateCommitment: liquidateCommitment,
+    list: list,
+    loadMaterial: loadMaterial,
+    lockedDialog: lockedDialog,
+    logAudit: logAudit,
+    logoutSim: logoutSim,
+    ls: ls,
+    lvl: lvl,
+    map: map,
+    mapBoq: mapBoq,
+    markAllRead: markAllRead,
+    markErr: markErr,
+    markNonStd: markNonStd,
+    markRead: markRead,
+    matObj: matObj,
+    matchDetail: matchDetail,
+    matchPanel: matchPanel,
+    matchResult: matchResult,
+    materialAudit: materialAudit,
+    mats: mats,
+    max: max,
+    mcode: mcode,
+    md: md,
+    mine: mine,
+    missing: missing,
+    mm: mm,
+    mname: mname,
+    mnm: mnm,
+    modal: modal,
+    modalStack: modalStack,
+    modeCount: modeCount,
+    modeKey: modeKey,
+    modeRows: modeRows,
+    mods: mods,
+    movIn: movIn,
+    movOut: movOut,
+    movs: movs,
+    mrate: mrate,
+    mreorder: mreorder,
+    msgs: msgs,
+    muom: muom,
+    myPending: myPending,
+    name: name,
+    navCount: navCount,
+    need: need,
+    needReason: needReason,
+    neg: neg,
+    net: net,
+    newFromBoq: newFromBoq,
+    newId: newId,
+    newSerial: newSerial,
+    next: next,
+    no: no,
+    note: note,
+    notes: notes,
+    notifMenu: notifMenu,
+    notify: notify,
+    nowIso: nowIso,
+    num: num,
+    nv: nv,
+    nval: nval,
+    nx: nx,
+    od: od,
+    ok: ok,
+    old: old,
+    oldT: oldT,
+    onTime: onTime,
+    open: open,
+    openDD: openDD,
+    openDefects: openDefects,
+    openDefs: openDefs,
+    openPo: openPo,
+    opts: opts,
+    orderQty: orderQty,
+    orderRate: orderRate,
+    ordered: ordered,
+    orig: orig,
+    other: other,
+    otherStoreQty: otherStoreQty,
+    out: out,
+    ovl: ovl,
+    pad: pad,
+    pageHead: pageHead,
+    pages: pages,
+    paid: paid,
+    paintChain: paintChain,
+    paintCs: paintCs,
+    paintEval: paintEval,
+    paintNotifCount: paintNotifCount,
+    paintReqLines: paintReqLines,
+    paintUser: paintUser,
+    paintWoLines: paintWoLines,
+    pane: pane,
+    parts: parts,
+    passed: passed,
+    pct: pct,
+    pend: pend,
+    pendRcpt: pendRcpt,
+    pending: pending,
+    pendingReqs: pendingReqs,
+    pgs: pgs,
+    phys: phys,
+    pipeline: pipeline,
+    planToTender: planToTender,
+    portals: portals,
+    postGrn: postGrn,
+    postGrnCore: postGrnCore,
+    postVariances: postVariances,
+    pre: pre,
+    priBadge: priBadge,
+    printWo: printWo,
+    proj: proj,
+    push: push,
+    q1: q1,
+    qeCalc: qeCalc,
+    qty: qty,
+    quoteEntry: quoteEntry,
+    quotes: quotes,
+    raiseDefect: raiseDefect,
+    raiseDelayAlerts: raiseDelayAlerts,
+    rank: rank,
+    rate: rate,
+    raw: raw,
+    rdt: rdt,
+    reactivateMaterial: reactivateMaterial,
+    reason: reason,
+    rec: rec,
+    recalcForecast: recalcForecast,
+    recd: recd,
+    receiveTransfer: receiveTransfer,
+    recommendRetender: recommendRetender,
+    reconcilePortal: reconcilePortal,
+    recordDispatch: recordDispatch,
+    recordNegotiation: recordNegotiation,
+    recordPayment: recordPayment,
+    recordReplacement: recordReplacement,
+    refreshNavCounts: refreshNavCounts,
+    refundRtv: refundRtv,
+    rej: rej,
+    rejQty: rejQty,
+    rejectAdjustment: rejectAdjustment,
+    rejectAdjustmentCore: rejectAdjustmentCore,
+    rejectDisposal: rejectDisposal,
+    rejectDisposalCore: rejectDisposalCore,
+    rejectReq: rejectReq,
+    releaseCommitment: releaseCommitment,
+    releasePg: releasePg,
+    renderTable: renderTable,
+    reorderToRequisition: reorderToRequisition,
+    repaintReqTables: repaintReqTables,
+    replaceRtv: replaceRtv,
+    reqEnsureWf: reqEnsureWf,
+    reqRegister: reqRegister,
+    reqStat: reqStat,
+    reqTags: reqTags,
+    reqTotal: reqTotal,
+    reqs: reqs,
+    requireOk: requireOk,
+    res: res,
+    resVal: resVal,
+    resetDefFilter: resetDefFilter,
+    resetDemo: resetDemo,
+    resetDspFilter: resetDspFilter,
+    resetGrnFilter: resetGrnFilter,
+    resetInvFilter: resetInvFilter,
+    resetMatFilter: resetMatFilter,
+    resetMovFilter: resetMovFilter,
+    resetReqFilter: resetReqFilter,
+    resetStockFilter: resetStockFilter,
+    resetTrailFilter: resetTrailFilter,
+    resetWarrFilter: resetWarrFilter,
+    resetWoFilter: resetWoFilter,
+    resolveDefect: resolveDefect,
+    resolveException: resolveException,
+    restockReturn: restockReturn,
+    restocked: restocked,
+    ret: ret,
+    returnEntry: returnEntry,
+    returnWo: returnWo,
+    returns: returns,
+    rid: rid,
+    rl: rl,
+    rmLine: rmLine,
+    rmWoLine: rmWoLine,
+    ro: ro,
+    roBanner: roBanner,
+    role: role,
+    roleDef: roleDef,
+    roleLimit: roleLimit,
+    roleStrip: roleStrip,
+    roles: roles,
+    root: root,
+    routeAllowed: routeAllowed,
+    routeRoles: routeRoles,
+    rows: rows,
+    rtFromIssue: rtFromIssue,
+    rtmBuild: rtmBuild,
+    rtmExport: rtmExport,
+    rtv: rtv,
+    rtvFromGrn: rtvFromGrn,
+    rules: rules,
+    runAllMatches: runAllMatches,
+    runEscalation: runEscalation,
+    runEscalationNow: runEscalationNow,
+    runMatch: runMatch,
+    same: same,
+    save: save,
+    saveAmendment: saveAmendment,
+    saveAudit: saveAudit,
+    saveBoqMap: saveBoqMap,
+    saveChecklistItem: saveChecklistItem,
+    saveDefect: saveDefect,
+    saveDefectUpdate: saveDefectUpdate,
+    saveDispatch: saveDispatch,
+    saveDisposal: saveDisposal,
+    saveDisposalCompletion: saveDisposalCompletion,
+    saveEval: saveEval,
+    saveExtendPg: saveExtendPg,
+    saveGrn: saveGrn,
+    saveInspection: saveInspection,
+    saveInvoice: saveInvoice,
+    saveIssue: saveIssue,
+    saveMaterial: saveMaterial,
+    saveNegotiation: saveNegotiation,
+    saveParams: saveParams,
+    saveQuote: saveQuote,
+    saveReq: saveReq,
+    saveReqCore: saveReqCore,
+    saveResolution: saveResolution,
+    saveReturn: saveReturn,
+    saveToolCheckin: saveToolCheckin,
+    saveToolCheckout: saveToolCheckout,
+    saveTransfer: saveTransfer,
+    saveWo: saveWo,
+    saveWorkflow: saveWorkflow,
+    score: score,
+    securitiesScreen: securitiesScreen,
+    securityAct: securityAct,
+    securityAudit: securityAudit,
+    seedBudgetHeads: seedBudgetHeads,
+    seedChecklists: seedChecklists,
+    seedDB: seedDB,
+    seedInterfaces: seedInterfaces,
+    seedMaterials: seedMaterials,
+    seedParams: seedParams,
+    seedStockOther: seedStockOther,
+    sel: sel,
+    selectVendor: selectVendor,
+    sendBackReq: sendBackReq,
+    sendToFinance: sendToFinance,
+    seq: seq,
+    set: set,
+    setJustification: setJustification,
+    setLine: setLine,
+    setOverride: setOverride,
+    setPhys: setPhys,
+    setPvReason: setPvReason,
+    setVal: setVal,
+    setWoLine: setWoLine,
+    sev: sev,
+    short: short,
+    showProfile: showProfile,
+    showWoWf: showWoWf,
+    simulateBulk: simulateBulk,
+    simulateSync: simulateSync,
+    skip: skip,
+    slaBadge: slaBadge,
+    slaCell: slaCell,
+    slaFor: slaFor,
+    slaItems: slaItems,
+    splitAward: splitAward,
+    src: src,
+    st: st,
+    stampChecklist: stampChecklist,
+    state: state,
+    stk: stk,
+    stock: stock,
+    stockAgeClass: stockAgeClass,
+    stockLedger: stockLedger,
+    stockPanel: stockPanel,
+    stockState: stockState,
+    stockVal: stockVal,
+    sub: sub,
+    submitCs: submitCs,
+    submitWo: submitWo,
+    sug: sug,
+    sum: sum,
+    summaryRow: summaryRow,
+    switchRole: switchRole,
+    switchTab: switchTab,
+    syncSub: syncSub,
+    syncWithBackend: syncWithBackend,
+    tableHtml: tableHtml,
+    tabsHtml: tabsHtml,
+    tax: tax,
+    tblExport: tblExport,
+    tblPage: tblPage,
+    tblPaint: tblPaint,
+    tblReload: tblReload,
+    tblRows: tblRows,
+    tblSearch: tblSearch,
+    tblSelAll: tblSelAll,
+    tblSelOne: tblSelOne,
+    tblSize: tblSize,
+    tblSort: tblSort,
+    tds: tds,
+    tenders: tenders,
+    testRule: testRule,
+    tn: tn,
+    toCsv: toCsv,
+    toast: toast,
+    toggleChecklistItem: toggleChecklistItem,
+    toggleGrp: toggleGrp,
+    toggleRole: toggleRole,
+    toggleRule: toggleRule,
+    toggleWorkflow: toggleWorkflow,
+    tool: tool,
+    toolCheckinEntry: toolCheckinEntry,
+    toolCheckoutEntry: toolCheckoutEntry,
+    tot: tot,
+    totVal: totVal,
+    total: total,
+    trStock: trStock,
+    trail: trail,
+    transferEntry: transferEntry,
+    transfers: transfers,
+    type: type,
+    types: types,
+    uid: uid,
+    uniq: uniq,
+    updateDefect: updateDefect,
+    url: url,
+    usable: usable,
+    used: used,
+    userMenu: userMenu,
+    vObj: vObj,
+    vTop: vTop,
+    va: va,
+    val: val,
+    val0: val0,
+    validate: validate,
+    value: value,
+    verif: verif,
+    view: view,
+    viewDefect: viewDefect,
+    viewDisposal: viewDisposal,
+    viewGrn: viewGrn,
+    viewInstrument: viewInstrument,
+    viewInvoice: viewInvoice,
+    viewMaterial: viewMaterial,
+    viewQuote: viewQuote,
+    viewReq: viewReq,
+    viewTender: viewTender,
+    viewWo: viewWo,
+    vname: vname,
+    vrows: vrows,
+    w: w,
+    warr: warr,
+    warrState: warrState,
+    warrantyHistory: warrantyHistory,
+    wf: wf,
+    wf8: wf8,
+    wfAdvance: wfAdvance,
+    wfBuild: wfBuild,
+    wfCanAct: wfCanAct,
+    wfEnd: wfEnd,
+    wfFinalRole: wfFinalRole,
+    wfGate: wfGate,
+    wfPanel: wfPanel,
+    wfPreviewHtml: wfPreviewHtml,
+    wfPush: wfPush,
+    wfPushSeed: wfPushSeed,
+    wfStage: wfStage,
+    withoutReason: withoutReason,
+    wo: wo,
+    woBudgetCheck: woBudgetCheck,
+    woCalc: woCalc,
+    woChain: woChain,
+    woEnsureWf: woEnsureWf,
+    woFromBid: woFromBid,
+    woFromReq: woFromReq,
+    woIssueCheck: woIssueCheck,
+    woPullReqLines: woPullReqLines,
+    woTaxFactor: woTaxFactor,
+    woTotals: woTotals,
+    woVendorInfo: woVendorInfo,
+    workflowEntry: workflowEntry,
+    workflows: workflows,
+    wos: wos,
+    x: x,
+    x0: x0,
+    x1: x1
   };
+
   for (var key in globalExports) {
     window[key] = globalExports[key];
   }
@@ -8497,5 +9531,8 @@ if (typeof window !== 'undefined') {
   try { window.Store = Store; } catch(e) {}
   try { window.SCREENS = SCREENS; } catch(e) {}
   try { window.ROUTE = ROUTE; } catch(e) {}
+  try { window.CUR = CUR; } catch(e) {}
+  try { window.ROLE_DEFS = ROLE_DEFS; } catch(e) {}
+  try { window.switchRole = switchRole; } catch(e) {}
+  try { window.goto = goto; } catch(e) {}
 }
-

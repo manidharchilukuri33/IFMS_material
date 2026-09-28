@@ -41,6 +41,12 @@ export function App() {
             <option>FY 2025-26</option>
             <option>FY 2024-25</option>
           </select>
+          <select
+            className="tb-btn"
+            id="roleSel"
+            style={{ padding: '0 6px' }}
+            title="Sign in as (demonstration role switch)"
+          ></select>
           <div className="bell" id="btnBell" title="Notifications">
             &#128276;
             <span className="badge-n" id="notifN">
@@ -48,10 +54,16 @@ export function App() {
             </span>
           </div>
           <div className="uchip" id="btnUser">
-            <div className="av">AK</div>
+            <div className="av" id="uAv">
+              AK
+            </div>
             <div>
-              <div className="n1">Anil Katwale</div>
-              <div className="n2">Procurement Officer</div>
+              <div className="n1" id="uName">
+                Anil Katwale
+              </div>
+              <div className="n2" id="uRole">
+                Procurement Officer
+              </div>
             </div>
             <span style={{ fontSize: '9px', opacity: 0.8 }}>&#9660;</span>
           </div>
@@ -71,9 +83,12 @@ export function App() {
       <main className="main">
         <div id="view"></div>
         <footer className="foot">
-          <span>IFMS Material Management Module | GNCTD | Government of NCT of Delhi</span>
           <span>
-            &copy; <span id="yr">2026</span> Government of NCT of Delhi &middot; Version 2.0 &middot;{' '}
+            IFMS Material Management Module | GNCTD | Demo Prototype &middot;{' '}
+            <a onClick={() => (window as any).goto?.('admin/about')}>Prototype status &amp; limitations</a>
+          </span>
+          <span>
+            &copy; <span id="yr">2026</span> Government of NCT of Delhi &middot; Version 3.0 &middot;{' '}
             <span id="storeMode" style={{ fontWeight: 600, color: 'var(--navy-2)' }}>
               Live Database: PostgreSQL 17 (ifms_jk)
             </span>
