@@ -81,7 +81,35 @@ function seq(prefix, list, field, width){
   return prefix + pad(max+1, width||6);
 }
 function uid(p){ return (p||'ID')+'-'+Math.random().toString(36).slice(2,8).toUpperCase(); }
-function byId(list, key, val){ return (list||[]).filter(function(r){ return r[key]===val; })[0]; }
+function byId(list, key, val){
+  if (!list || !list.length || val === undefined || val === null) return null;
+  var sVal = String(val).trim().toLowerCase();
+  for (var i = 0; i < list.length; i++) {
+    var r = list[i];
+    if (!r) continue;
+    if (r[key] === val) return r;
+    if (r[key] !== undefined && r[key] !== null && String(r[key]).trim().toLowerCase() === sVal) {
+      return r;
+    }
+  }
+  // Secondary fallback lookup by alternate primary key fields
+  if (key === 'id' || key === 'code' || key === 'no' || key === 'mat') {
+    for (var j = 0; j < list.length; j++) {
+      var it = list[j];
+      if (!it) continue;
+      if (it.id !== undefined && String(it.id).trim().toLowerCase() === sVal) return it;
+      if (it.code && String(it.code).trim().toLowerCase() === sVal) return it;
+      if (it.no && String(it.no).trim().toLowerCase() === sVal) return it;
+      if (it.mat && String(it.mat).trim().toLowerCase() === sVal) return it;
+      if (it.item_code && String(it.item_code).trim().toLowerCase() === sVal) return it;
+      if (it.req_no && String(it.req_no).trim().toLowerCase() === sVal) return it;
+      if (it.wo_no && String(it.wo_no).trim().toLowerCase() === sVal) return it;
+      if (it.grn_no && String(it.grn_no).trim().toLowerCase() === sVal) return it;
+      if (it.invoice_no && String(it.invoice_no).trim().toLowerCase() === sVal) return it;
+    }
+  }
+  return null;
+}
 function sum(list, f){ return (list||[]).reduce(function(s,r){ return s+(Number(typeof f==='function'?f(r):r[f])||0); },0); }
 function pct(a,b){ return b ? (a/b*100) : 0; }
 function uniq(a){ var o=[]; a.forEach(function(x){ if(o.indexOf(x)<0) o.push(x); }); return o; }
@@ -1686,7 +1714,8 @@ function resetMatFilter(){
   tblReload('tMat', DB.materials); toast('Filters cleared.','in');
 }
 function viewMaterial(id){
-  var m = byId(DB.materials,'id',id);
+  var m = byId(DB.materials,'id',id) || byId(DB.materials,'code',id);
+  if(!m){ toast('Material not found','er'); return; }
   var s = byId(DB.stock,'mat',m.code) || {avail:0,reserved:0,inspection:0,blocked:0};
   modal({title:'Material '+esc(m.code), size:'lg',
     body: tabsHtml('vm',['Overview','Inventory','Financial','Traceability','Audit history'])+
@@ -1726,9 +1755,14 @@ function viewMaterial(id){
     footer:'<button class="btn gh" onclick="closeModal();editMaterial(\''+m.id+'\')">Edit material</button>'+
       '<button class="btn" data-close>Close</button>'});
 }
-function editMaterial(id){ goto('mm/create'); setTimeout(function(){ loadMaterial(id); }, 40); }
+function editMaterial(id){
+  var m = byId(DB.materials,'id',id) || byId(DB.materials,'code',id);
+  if(!m){ toast('Material not found','er'); return; }
+  goto('mm/create'); setTimeout(function(){ loadMaterial(m.id || id); }, 40);
+}
 function materialAudit(id){
-  var m = byId(DB.materials,'id',id);
+  var m = byId(DB.materials,'id',id) || byId(DB.materials,'code',id);
+  if(!m){ toast('Material not found','er'); return; }
   modal({title:'Audit history \u2014 '+esc(m.code), size:'lg', body: auditTableHtml(DB.trail.filter(function(t){ return t.ref===m.code; }))});
 }
 function deactivateMaterial(id){
@@ -2252,7 +2286,8 @@ function initiateProc(id){
     });
 }
 function viewReq(id){
-  var r = byId(DB.requisitions,'id',id);
+  var r = byId(DB.requisitions,'id',id) || byId(DB.requisitions,'no',id);
+  if(!r){ toast('Requisition not found','er'); return; }
   var done = ['Approved','Procurement Initiated','Partially Procured','Fully Procured'].indexOf(r.status)>=0;
   var chain = [['Requestor','ok'],['Head of Office','ok'],
     ['Finance Wing', r.budget==='Available'?'ok':'wa'],
@@ -2625,7 +2660,8 @@ SCREENS['proc/tender'] = function(){
   ]})+'</div></div>';
 };
 function viewTender(id){
-  var t = byId(DB.tenders,'id',id);
+  var t = byId(DB.tenders,'id',id) || byId(DB.tenders,'no',id);
+  if(!t){ toast('Tender not found','er'); return; }
   var bids = DB.quotes.filter(function(q){ return q.tender===t.no; });
   var lines = DB.boq.filter(function(b){ return b.tender===t.no; });
   modal({title:'Tender '+esc(t.no), size:'lg',
@@ -3453,7 +3489,8 @@ function resetWoFilter(){
   tblReload('tWo', DB.workorders); toast('Filters cleared.','in');
 }
 function viewWo(id){
-  var w = byId(DB.workorders,'id',id);
+  var w = byId(DB.workorders,'id',id) || byId(DB.workorders,'no',id);
+  if(!w){ toast('Work order not found','er'); return; }
   var d = DB.deliveries.filter(function(x){ return x.wo===w.no; });
   var g = DB.grns.filter(function(x){ return x.wo===w.no; });
   var inv = DB.invoices.filter(function(x){ return x.wo===w.no; });
@@ -3932,7 +3969,8 @@ function saveGrn(){
   goto('grn/list');
 }
 function viewGrn(id){
-  var g = byId(DB.grns,'id',id);
+  var g = byId(DB.grns,'id',id) || byId(DB.grns,'no',id);
+  if(!g){ toast('GRN not found','er'); return; }
   var w = byId(DB.workorders,'no',g.wo) || {lines:[{rate:0}]};
   var ins = DB.inspections.filter(function(x){ return x.grn===g.no; });
   modal({title:'Goods Receipt '+esc(g.no), size:'lg',
@@ -4040,7 +4078,8 @@ SCREENS['grn/pending'] = function(){
   ], empty:'No receipt is awaiting inspection'})+'</div></div>';
 };
 function inspectGrn(id){
-  var g = byId(DB.grns,'id',id);
+  var g = byId(DB.grns,'id',id) || byId(DB.grns,'no',id);
+  if(!g){ toast('GRN not found','er'); return; }
   modal({title:'Inspection \u2014 '+esc(g.no), size:'md',
     body:'<div id="inForm"><table class="kv" style="margin-bottom:11px">'+
       kvRow('Work order','<span class="mono">'+esc(g.wo)+'</span>')+
@@ -4147,7 +4186,8 @@ SCREENS['grn/inspection'] = function(){
   ], empty:'No inspection recorded'})+'</div></div>';
 };
 function inspectionReport(id){
-  var i = byId(DB.inspections,'id',id);
+  var i = byId(DB.inspections,'id',id) || byId(DB.inspections,'no',id);
+  if(!i){ toast('Inspection report not found','er'); return; }
   modal({title:'Inspection report '+esc(i.no), size:'md',
     body:'<div style="border:1px solid var(--line);padding:16px;border-radius:6px">'+
       '<div style="text-align:center;border-bottom:2px solid var(--navy-2);padding-bottom:9px;margin-bottom:11px">'+
@@ -5100,7 +5140,8 @@ function saveInvoice(){
   setTimeout(function(){ runMatch(rec.id); }, 400);
 }
 function viewInvoice(id){
-  var i = byId(DB.invoices,'id',id);
+  var i = byId(DB.invoices,'id',id) || byId(DB.invoices,'no',id);
+  if(!i){ toast('Invoice not found','er'); return; }
   var net = i.amount - i.retention - i.tds - i.gstTds - i.ld;
   modal({title:'Invoice '+esc(i.no), size:'lg',
     body: tabsHtml('vi',['Invoice details','Deductions','Three-way match','Audit'])+
@@ -5586,7 +5627,8 @@ function saveDefect(){
   goto('warranty/defects');
 }
 function viewDefect(id){
-  var d = byId(DB.defects,'id',id);
+  var d = byId(DB.defects,'id',id) || byId(DB.defects,'no',id);
+  if(!d){ toast('Defect not found','er'); return; }
   var late = ['Resolved','Closed'].indexOf(d.status)<0 && daysBetween(d.due,TODAY)>0;
   modal({title:'Defect complaint '+esc(d.no), size:'lg',
     body: tabsHtml('vd',['Complaint details','Resolution','Audit'])+
@@ -5899,7 +5941,8 @@ function saveDisposal(){
   goto('disp/proposal');
 }
 function viewDisposal(id){
-  var d = byId(DB.disposals,'id',id);
+  var d = byId(DB.disposals,'id',id) || byId(DB.disposals,'no',id);
+  if(!d){ toast('Disposal proposal not found','er'); return; }
   modal({title:'Disposal proposal '+esc(d.no), size:'md',
     body:'<div class="grid g2"><table class="kv">'+
       kvRow('Proposal number','<span class="mono">'+esc(d.no)+'</span>')+
