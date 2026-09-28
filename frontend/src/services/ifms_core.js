@@ -8081,7 +8081,7 @@ function wfPushSeed(rec, level, date){
 /* ------------------------------------------------------------
    BOOT
    ------------------------------------------------------------ */
-(function boot(){
+function boot(){
   DB = Store.get();
   if(!DB || !DB.materials || !DB.materials.length){ DB = seedDB(); save(); }
   augmentDB();
@@ -8089,41 +8089,65 @@ function wfPushSeed(rec, level, date){
   document.body.classList.toggle('ro', isRO());
   applyGuards();
   ['materials','requisitions','tenders','boq','quotes','workorders','deliveries','grns','inspections',
-   'rtv','stock','movements','issues','returns','transfers','invoices','fees','emds','pgs','warranty',
+   'rtv','stock','movements','issues','returns','transfers','toolIssuances','invoices','fees','emds','pgs','warranty',
    'defects','disposals','audits','verification','adjustments','forecast','assets','portals','trail',
    'notifications','workflows','rules','roles','limits','amendments','plans','commitments','checklists',
    'interfaces','budgetHeads','stockOther'].forEach(function(k){
     if(!DB[k]) DB[k] = [];
   });
-  document.getElementById('yr').textContent = new Date().getFullYear();
-  document.getElementById('storeMode').textContent = 'Data stored in '+Store.mode;
+  var yrEl = document.getElementById('yr');
+  if (yrEl) yrEl.textContent = new Date().getFullYear();
+  var smEl = document.getElementById('storeMode');
+  if (smEl) smEl.textContent = 'Data stored in '+Store.mode;
   save();
   paintUser();
   runEscalation(true);
   buildSidebar();
   paintNotifCount();
   goto('dash');
-  document.getElementById('roleSel').onchange = function(){ switchRole(this.value); };
+  
+  var rSel = document.getElementById('roleSel');
+  if (rSel) {
+    rSel.onchange = function(){ switchRole(this.value); };
+  }
 
-  document.getElementById('btnSide').onclick = function(){
-    if(window.innerWidth<=900) document.body.classList.toggle('sopen');
-    else {
-      var s = document.documentElement.style;
-      var cur = getComputedStyle(document.documentElement).getPropertyValue('--side-w').trim();
-      s.setProperty('--side-w', cur==='250px' ? '56px' : '250px');
-    }
-  };
-  document.getElementById('btnUser').onclick = function(e){ e.stopPropagation(); userMenu(); };
-  document.getElementById('btnBell').onclick = function(e){ e.stopPropagation(); notifMenu(); };
-  document.getElementById('gq').addEventListener('input', function(){ globalSearch(this.value); });
-  document.getElementById('gq').addEventListener('blur', function(){
-    setTimeout(function(){ document.getElementById('gres').classList.add('hide'); }, 180);
-  });
-  document.getElementById('fySel').onchange = function(){
-    toast('Financial year switched to <b>'+esc(this.value)+'</b>. The demo data set covers FY 2026-27.','in');
-  };
+  var btnSide = document.getElementById('btnSide');
+  if (btnSide) {
+    btnSide.onclick = function(){
+      if(window.innerWidth<=900) document.body.classList.toggle('sopen');
+      else {
+        var s = document.documentElement.style;
+        var cur = getComputedStyle(document.documentElement).getPropertyValue('--side-w').trim();
+        s.setProperty('--side-w', cur==='250px' ? '56px' : '250px');
+      }
+    };
+  }
+  
+  var btnUser = document.getElementById('btnUser');
+  if (btnUser) btnUser.onclick = function(e){ e.stopPropagation(); userMenu(); };
+  
+  var btnBell = document.getElementById('btnBell');
+  if (btnBell) btnBell.onclick = function(e){ e.stopPropagation(); notifMenu(); };
+  
+  var gq = document.getElementById('gq');
+  if (gq) {
+    gq.addEventListener('input', function(){ globalSearch(this.value); });
+    gq.addEventListener('blur', function(){
+      setTimeout(function(){ 
+        var gr = document.getElementById('gres');
+        if (gr) gr.classList.add('hide'); 
+      }, 180);
+    });
+  }
+  
+  var fySel = document.getElementById('fySel');
+  if (fySel) {
+    fySel.onchange = function(){
+      toast('Financial year switched to <b>'+esc(this.value)+'</b>. The demo data set covers FY 2026-27.','in');
+    };
+  }
   toast('Material Management V3 loaded. Signed in as <b>'+esc(curUser())+'</b> ('+esc(curRole())+'). Use the role selector in the top bar to demonstrate each login in the hierarchy.','ok',6500);
-})();
+}
 
 
 
