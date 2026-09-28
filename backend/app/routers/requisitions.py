@@ -6,7 +6,11 @@ from datetime import date, datetime
 from app.database import get_db
 from app.models.material_models import MtrlReq, MtrlReqLine, MtrlStore, MtrlItem, MtrlProcPln
 
+from app.routers._common import get_permissions, require_permission, enforce_not_self_approval, insert_audit, get_audit_history, get_workflow_transitions, apply_transition, CurrentUser
+
 router = APIRouter(prefix="/requisitions", tags=["Requisition Management"])
+
+FORM_CODE = "mtrl-requisition"
 
 @router.get("/")
 def list_requisitions(
@@ -313,3 +317,42 @@ def consolidate_requisitions(data: dict, db: Session = Depends(get_db)):
         "plan_no": plan_no,
         "total_value": float(tot_val)
     }
+
+
+# ----------------- SKILL.md Standard Endpoints -----------------
+@router.get("/permissions/mine")
+def get_my_permissions(db: Session = Depends(get_db)):
+    user = CurrentUser()
+    return get_permissions(db, user, FORM_CODE)
+
+@router.get("/{id}/available-actions")
+def get_requisition_actions(id: int, db: Session = Depends(get_db)):
+    r = db.query(MtrlReq).filter(MtrlReq.id == id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Requisition not found")
+    transitions = get_workflow_transitions(db, "REQUISITION", r.current_stage)
+    return {"actions": transitions, "can_edit": r.current_stage in ("Draft", "Draft Saved")}
+
+@router.post("/{id}/action")
+def perform_requisition_action(id: int, payload: dict, db: Session = Depends(get_db)):
+    r = db.query(MtrlReq).filter(MtrlReq.id == id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Requisition not found")
+    action_code = payload.get("action_code", "")
+    remarks = payload.get("remarks", "")
+    user = CurrentUser()
+    from_stage = r.current_stage
+    to_stage = apply_transition(db, user, FORM_CODE, "REQUISITION", from_stage, action_code, remarks, created_by=r.created_by if hasattr(r, 'created_by') else None)
+    r.current_stage = to_stage
+    if action_code in ("APPROVE", "SANCTION"):
+        r.approved_at = datetime.now()
+    db.commit()
+    insert_audit(db, "mtrl_requisition", id, action_code, remarks=remarks, stage_from=from_stage, stage_to=to_stage)
+    return {"message": f"Action {action_code} applied successfully", "stage": to_stage}
+
+@router.get("/{id}/audit")
+def get_requisition_audit(id: int, db: Session = Depends(get_db)):
+    r = db.query(MtrlReq).filter(MtrlReq.id == id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Requisition not found")
+    return get_audit_history(db, "mtrl_requisition", id)

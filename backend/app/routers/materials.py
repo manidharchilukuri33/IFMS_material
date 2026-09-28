@@ -9,7 +9,11 @@ from app.models.material_models import (
     MtrlItem, MtrlItemCat, MtrlUom, MtrlUomConv, MtrlVariant, MtrlBoq, MtrlStock
 )
 
+from app.routers._common import get_permissions, require_permission, enforce_not_self_approval, insert_audit, get_audit_history, get_workflow_transitions, apply_transition, CurrentUser
+
 router = APIRouter(prefix="/materials", tags=["Material Master"])
+
+FORM_CODE = "mtrl-item-master"
 
 # ----------------- Items -----------------
 @router.get("/items")
@@ -362,3 +366,57 @@ def bulk_upload_materials(file: Optional[UploadFile] = File(None), db: Session =
         "updated_materials": 2,
         "errors": []
     }
+
+
+# ----------------- SKILL.md Standard Endpoints -----------------
+@router.get("/permissions/mine")
+def get_my_permissions(db: Session = Depends(get_db)):
+    user = CurrentUser()
+    return get_permissions(db, user, FORM_CODE)
+
+@router.get("/items/{id}/available-actions")
+def get_item_actions(id: int, db: Session = Depends(get_db)):
+    it = db.query(MtrlItem).filter(MtrlItem.id == id).first()
+    if not it:
+        raise HTTPException(status_code=404, detail="Item not found")
+    transitions = get_workflow_transitions(db, "MATERIAL_MASTER", "Active" if it.is_active else "Inactive")
+    return {"actions": transitions, "can_edit": True}
+
+@router.post("/items/{id}/action")
+def perform_item_action(id: int, payload: dict, db: Session = Depends(get_db)):
+    it = db.query(MtrlItem).filter(MtrlItem.id == id).first()
+    if not it:
+        raise HTTPException(status_code=404, detail="Item not found")
+    action_code = payload.get("action_code", "")
+    remarks = payload.get("remarks", "")
+    user = CurrentUser()
+    target_status = apply_transition(db, user, FORM_CODE, "MATERIAL_MASTER", "Active" if it.is_active else "Inactive", action_code, remarks)
+    if action_code == "DEACTIVATE":
+        it.is_active = False
+    elif action_code == "ACTIVATE":
+        it.is_active = True
+    db.commit()
+    insert_audit(db, "mtrl_item", id, action_code, remarks=remarks, stage_from="Active" if not it.is_active else "Inactive", stage_to=target_status)
+    return {"message": f"Action {action_code} completed successfully", "status": target_status}
+
+@router.get("/items/{id}/audit")
+def get_item_audit(id: int, db: Session = Depends(get_db)):
+    it = db.query(MtrlItem).filter(MtrlItem.id == id).first()
+    if not it:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return get_audit_history(db, "mtrl_item", id)
+
+@router.post("/items/{id}/toggle-active")
+def toggle_item_active(id: int, db: Session = Depends(get_db)):
+    it = db.query(MtrlItem).filter(MtrlItem.id == id).first()
+    if not it:
+        raise HTTPException(status_code=404, detail="Item not found")
+    old_val = it.is_active
+    it.is_active = not it.is_active
+    db.commit()
+    insert_audit(
+        db, "mtrl_item", id, "TOGGLE_ACTIVE",
+        changes=[{"field": "is_active", "before": old_val, "after": it.is_active}],
+        remarks=f"Item {it.item_code} active status toggled to {it.is_active}"
+    )
+    return {"message": f"Item active status updated to {it.is_active}", "is_active": it.is_active}

@@ -82,24 +82,39 @@ def get_audit_trail(table_code: Optional[str] = None, record_id: Optional[int] =
     res = []
     for l in logs:
         ch = l.changes or {}
+        if isinstance(ch, list):
+            field_val = ch[0].get("field", "—") if len(ch) > 0 and isinstance(ch[0], dict) else "—"
+            old_val = str(ch[0].get("before", "—")) if len(ch) > 0 and isinstance(ch[0], dict) else "—"
+            new_val = str(ch[0].get("after", "—")) if len(ch) > 0 and isinstance(ch[0], dict) else "—"
+            ref_val = f"#{l.record_id}"
+            approval_val = "—"
+        elif isinstance(ch, dict):
+            field_val = ch.get("field", "—")
+            old_val = str(ch.get("old_value") or ch.get("oldv") or ch.get("before") or "—")
+            new_val = str(ch.get("new_value") or ch.get("newv") or ch.get("after") or "—")
+            ref_val = ch.get("ref_no") or f"#{l.record_id}"
+            approval_val = ch.get("approval_ref", "—")
+        else:
+            field_val, old_val, new_val, ref_val, approval_val = "—", "—", "—", f"#{l.record_id}", "—"
+
         res.append({
             "id": l.id,
             "ts": l.changed_at.isoformat() if l.changed_at else None,
             "timestamp": l.changed_at.isoformat() if l.changed_at else None,
             "type": l.table_code.replace("mtrl_", "").replace("_", " ").title(),
             "table_code": l.table_code,
-            "ref": ch.get("ref_no") or f"#{l.record_id}",
-            "doc_ref_no": ch.get("ref_no") or f"#{l.record_id}",
+            "ref": ref_val,
+            "doc_ref_no": ref_val,
             "action": l.action,
-            "field": ch.get("field", "—"),
-            "oldv": str(ch.get("old_value") or ch.get("oldv") or "—"),
-            "newv": str(ch.get("new_value") or ch.get("newv") or "—"),
+            "field": field_val,
+            "oldv": old_val,
+            "newv": new_val,
             "reason": l.remarks or "—",
             "details": l.remarks or f"{l.action} on {l.table_code}",
             "by": l.changed_by_name or "Anil Katwale",
             "user": l.changed_by_name or "Anil Katwale (Procurement Officer)",
             "role": "Procurement Officer",
-            "approval": ch.get("approval_ref", "—"),
+            "approval": approval_val,
             "src": "IFMS Web",
             "ip": l.ip_address or "127.0.0.1"
         })

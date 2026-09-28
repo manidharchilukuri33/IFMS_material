@@ -6,7 +6,11 @@ from app.database import get_db
 from app.models.core_models import Department, Office, FinancialYear, BudgetHead
 from app.models.material_models import MtrlWfCfg, MtrlLimit, MtrlNotif, MtrlParty
 
+from app.routers._common import get_permissions, require_permission, enforce_not_self_approval, insert_audit, get_audit_history, get_workflow_transitions, apply_transition, CurrentUser
+
 router = APIRouter(prefix="/admin", tags=["Administration & Settings"])
+
+FORM_CODE = "mtrl-admin"
 
 # ----------------- Workflow Configurations -----------------
 @router.get("/workflows")
@@ -256,3 +260,42 @@ def list_workflow_logs(table_code: Optional[str] = None, record_id: Optional[int
         }
         for l in logs
     ]
+
+
+# ----------------- SKILL.md Standard Endpoints -----------------
+@router.get("/permissions/mine")
+def get_my_permissions(db: Session = Depends(get_db)):
+    user = CurrentUser()
+    return get_permissions(db, user, FORM_CODE)
+
+@router.get("/{id}/available-actions")
+def get_entity_actions(id: int, db: Session = Depends(get_db)):
+    rec = db.query(AppUser).filter(AppUser.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    st = getattr(rec, "is_active", "Active")
+    transitions = get_workflow_transitions(db, "ADMIN", str(st))
+    return {"actions": transitions, "can_edit": str(st) in ()}
+
+@router.post("/{id}/action")
+def perform_entity_action(id: int, payload: dict, db: Session = Depends(get_db)):
+    rec = db.query(AppUser).filter(AppUser.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    action_code = payload.get("action_code", "")
+    remarks = payload.get("remarks", "")
+    user = CurrentUser()
+    from_st = str(getattr(rec, "is_active", "Active"))
+    to_st = apply_transition(db, user, FORM_CODE, "ADMIN", from_st, action_code, remarks, created_by=getattr(rec, 'created_by', None))
+    if hasattr(rec, "is_active"):
+        setattr(rec, "is_active", to_st)
+    db.commit()
+    insert_audit(db, "app_users", id, action_code, remarks=remarks, stage_from=from_st, stage_to=to_st)
+    return {"message": f"Action {action_code} applied successfully", "status": to_st}
+
+@router.get("/{id}/audit")
+def get_entity_audit(id: int, db: Session = Depends(get_db)):
+    rec = db.query(AppUser).filter(AppUser.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return get_audit_history(db, "app_users", id)

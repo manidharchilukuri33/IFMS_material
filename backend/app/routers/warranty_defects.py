@@ -5,7 +5,11 @@ from datetime import date, datetime, timedelta
 from app.database import get_db
 from app.models.material_models import MtrlWarranty, MtrlDefect, MtrlItem, MtrlParty
 
+from app.routers._common import get_permissions, require_permission, enforce_not_self_approval, insert_audit, get_audit_history, get_workflow_transitions, apply_transition, CurrentUser
+
 router = APIRouter(prefix="/warranty", tags=["Warranty and Defects"])
+
+FORM_CODE = "mtrl-warranty-defect"
 
 # ----------------- Warranty Registry -----------------
 @router.get("/assets")
@@ -191,3 +195,42 @@ def escalate_defect(id: int, data: Optional[dict] = None, db: Session = Depends(
     )
     db.commit()
     return {"message": "Defect ticket escalated to OEM Headquarters and GeM incident portal"}
+
+
+# ----------------- SKILL.md Standard Endpoints -----------------
+@router.get("/permissions/mine")
+def get_my_permissions(db: Session = Depends(get_db)):
+    user = CurrentUser()
+    return get_permissions(db, user, FORM_CODE)
+
+@router.get("/{id}/available-actions")
+def get_entity_actions(id: int, db: Session = Depends(get_db)):
+    rec = db.query(MtrlDefect).filter(MtrlDefect.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    st = getattr(rec, "status", "Active")
+    transitions = get_workflow_transitions(db, "DEFECT_COMPLAINT", str(st))
+    return {"actions": transitions, "can_edit": str(st) in ('Open', 'Reported')}
+
+@router.post("/{id}/action")
+def perform_entity_action(id: int, payload: dict, db: Session = Depends(get_db)):
+    rec = db.query(MtrlDefect).filter(MtrlDefect.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    action_code = payload.get("action_code", "")
+    remarks = payload.get("remarks", "")
+    user = CurrentUser()
+    from_st = str(getattr(rec, "status", "Active"))
+    to_st = apply_transition(db, user, FORM_CODE, "DEFECT_COMPLAINT", from_st, action_code, remarks, created_by=getattr(rec, 'created_by', None))
+    if hasattr(rec, "status"):
+        setattr(rec, "status", to_st)
+    db.commit()
+    insert_audit(db, "mtrl_defect", id, action_code, remarks=remarks, stage_from=from_st, stage_to=to_st)
+    return {"message": f"Action {action_code} applied successfully", "status": to_st}
+
+@router.get("/{id}/audit")
+def get_entity_audit(id: int, db: Session = Depends(get_db)):
+    rec = db.query(MtrlDefect).filter(MtrlDefect.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return get_audit_history(db, "mtrl_defect", id)

@@ -9,7 +9,11 @@ from app.models.material_models import (
     MtrlInvoice, MtrlMatch, MtrlWo, MtrlGrn, MtrlParty
 )
 
+from app.routers._common import get_permissions, require_permission, enforce_not_self_approval, insert_audit, get_audit_history, get_workflow_transitions, apply_transition, CurrentUser
+
 router = APIRouter(prefix="/billing", tags=["Billing & Finance Interface"])
+
+FORM_CODE = "mtrl-invoice"
 
 # ----------------- Invoices -----------------
 @router.get("/invoices")
@@ -217,3 +221,42 @@ def record_payment(id: int, data: dict, db: Session = Depends(get_db)):
     inv.payment_date = date.today()
     db.commit()
     return {"message": "Payment clearance recorded", "utr_number": inv.utr_number}
+
+
+# ----------------- SKILL.md Standard Endpoints -----------------
+@router.get("/permissions/mine")
+def get_my_permissions(db: Session = Depends(get_db)):
+    user = CurrentUser()
+    return get_permissions(db, user, FORM_CODE)
+
+@router.get("/{id}/available-actions")
+def get_entity_actions(id: int, db: Session = Depends(get_db)):
+    rec = db.query(MtrlInvoice).filter(MtrlInvoice.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    st = getattr(rec, "payment_status", "Active")
+    transitions = get_workflow_transitions(db, "INVOICE", str(st))
+    return {"actions": transitions, "can_edit": str(st) in ('Pending', 'Unpaid')}
+
+@router.post("/{id}/action")
+def perform_entity_action(id: int, payload: dict, db: Session = Depends(get_db)):
+    rec = db.query(MtrlInvoice).filter(MtrlInvoice.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    action_code = payload.get("action_code", "")
+    remarks = payload.get("remarks", "")
+    user = CurrentUser()
+    from_st = str(getattr(rec, "payment_status", "Active"))
+    to_st = apply_transition(db, user, FORM_CODE, "INVOICE", from_st, action_code, remarks, created_by=getattr(rec, 'created_by', None))
+    if hasattr(rec, "payment_status"):
+        setattr(rec, "payment_status", to_st)
+    db.commit()
+    insert_audit(db, "mtrl_invoice", id, action_code, remarks=remarks, stage_from=from_st, stage_to=to_st)
+    return {"message": f"Action {action_code} applied successfully", "status": to_st}
+
+@router.get("/{id}/audit")
+def get_entity_audit(id: int, db: Session = Depends(get_db)):
+    rec = db.query(MtrlInvoice).filter(MtrlInvoice.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return get_audit_history(db, "mtrl_invoice", id)

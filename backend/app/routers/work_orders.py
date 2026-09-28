@@ -9,7 +9,11 @@ from app.models.material_models import (
     MtrlWo, MtrlWoLine, MtrlWoAmend, MtrlDelivery, MtrlParty, MtrlStore, MtrlItem
 )
 
+from app.routers._common import get_permissions, require_permission, enforce_not_self_approval, insert_audit, get_audit_history, get_workflow_transitions, apply_transition, CurrentUser
+
 router = APIRouter(prefix="/work-orders", tags=["Work Orders & Purchase Orders"])
+
+FORM_CODE = "mtrl-work-order"
 
 @router.get("/")
 def list_work_orders(
@@ -328,3 +332,42 @@ def update_delivery(id: int, data: dict, db: Session = Depends(get_db)):
 
     db.commit()
     return {"message": "Delivery tracking updated successfully", "id": d.id}
+
+
+# ----------------- SKILL.md Standard Endpoints -----------------
+@router.get("/permissions/mine")
+def get_my_permissions(db: Session = Depends(get_db)):
+    user = CurrentUser()
+    return get_permissions(db, user, FORM_CODE)
+
+@router.get("/{id}/available-actions")
+def get_entity_actions(id: int, db: Session = Depends(get_db)):
+    rec = db.query(MtrlWo).filter(MtrlWo.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    st = getattr(rec, "current_stage", "Active")
+    transitions = get_workflow_transitions(db, "WORK_ORDER", str(st))
+    return {"actions": transitions, "can_edit": str(st) in ('Draft', 'Draft Saved')}
+
+@router.post("/{id}/action")
+def perform_entity_action(id: int, payload: dict, db: Session = Depends(get_db)):
+    rec = db.query(MtrlWo).filter(MtrlWo.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    action_code = payload.get("action_code", "")
+    remarks = payload.get("remarks", "")
+    user = CurrentUser()
+    from_st = str(getattr(rec, "current_stage", "Active"))
+    to_st = apply_transition(db, user, FORM_CODE, "WORK_ORDER", from_st, action_code, remarks, created_by=getattr(rec, 'created_by', None))
+    if hasattr(rec, "current_stage"):
+        setattr(rec, "current_stage", to_st)
+    db.commit()
+    insert_audit(db, "mtrl_work_order", id, action_code, remarks=remarks, stage_from=from_st, stage_to=to_st)
+    return {"message": f"Action {action_code} applied successfully", "status": to_st}
+
+@router.get("/{id}/audit")
+def get_entity_audit(id: int, db: Session = Depends(get_db)):
+    rec = db.query(MtrlWo).filter(MtrlWo.id == id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return get_audit_history(db, "mtrl_work_order", id)
